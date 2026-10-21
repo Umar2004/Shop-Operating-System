@@ -64,6 +64,28 @@ const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 let mainWindow;
 let backendProcess;
 let backendOutput = '';
+let usingExistingBackend = false;
+
+// Keep only the tail of backend output in memory (it is also written to the log file)
+const BACKEND_OUTPUT_LIMIT = 64 * 1024;
+function appendBackendOutput(text) {
+  backendOutput = (backendOutput + text).slice(-BACKEND_OUTPUT_LIMIT);
+}
+
+// One copy of the app at a time: a second launch focuses the existing window instead of
+// starting a second backend that would fail on the already-used port 4000.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
 
 // Enumerate all USB devices that have a Printer class interface (bInterfaceClass = 0x07).
 // Returns an array of { vid, pid, label, ifaceNumber, outEpAddress, device }.
@@ -161,6 +183,8 @@ function sendRawToPrinter(usbDeviceId, dataBuffer) {
     }
 
     const endpoint = iface.endpoint(entry.outEpAddress);
+    // libusb waits forever by default; a stalled printer (out of paper, cover open) must fail instead
+    endpoint.timeout = 15000;
     endpoint.transfer(dataBuffer, (err) => {
       iface.release(() => { try { entry.device.close(); } catch (_) {} });
       if (err) {
@@ -232,8 +256,14 @@ ipcMain.handle('printer:print', async (event, options) => {
 
     log('PRINTER', `Print options: ${JSON.stringify(printOptions)}`);
 
+    // Some drivers never call back; give up after 30 s so the Sell screen is not left waiting forever
     return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        log('PRINTER', 'Print timed out after 30 s', true);
+        reject(new Error('Printer did not respond (timed out after 30 s)'));
+      }, 30000);
       printWindow.webContents.print(printOptions, (success, errorType) => {
+        clearTimeout(timer);
         if (!success) {
           log('PRINTER', `Print failed: ${errorType}`, true);
           reject(new Error(`Print failed: ${errorType}`));
@@ -418,9 +448,11 @@ async function startBackend() {
     return;
   }
 
-  // In dev mode, check if backend is already running (e.g., via npm run dev)
-  if (isDev) {
-    log('BACKEND', 'Dev mode: Checking if backend is already running...');
+  // Check if a backend is already running: in dev via `npm run dev`; in production a backend left
+  // behind by an earlier copy of the app that did not shut down cleanly. Reuse it instead of
+  // spawning a second one that cannot bind port 4000.
+  {
+    log('BACKEND', 'Checking if a backend is already running on port 4000...');
     try {
       const http = require('http');
       const backendRunning = await new Promise((resolve) => {
@@ -441,8 +473,9 @@ async function startBackend() {
       });
 
       if (backendRunning) {
-        log('BACKEND', '✓ Backend is already running on port 4000 (likely started via npm run dev)');
+        log('BACKEND', '✓ Backend is already running on port 4000');
         log('BACKEND', 'Skipping backend spawn - using existing server');
+        usingExistingBackend = true;
         return;
       } else {
         log('BACKEND', 'Backend not detected on port 4000, will spawn new instance...');
@@ -812,7 +845,7 @@ async function startBackend() {
     if (!isDev) {
       backendProcess.stdout.on('data', (data) => {
         const output = data.toString();
-        backendOutput += output;
+        appendBackendOutput(output);
         const lines = output.split('\n').filter(line => line.trim());
         lines.forEach(line => {
           if (line.trim()) {
@@ -827,7 +860,7 @@ async function startBackend() {
 
       backendProcess.stderr.on('data', (data) => {
         const error = data.toString();
-        backendOutput += error;
+        appendBackendOutput(error);
         const lines = error.split('\n').filter(line => line.trim());
         lines.forEach(line => {
           if (line.trim()) {
@@ -994,8 +1027,13 @@ async function createWindow() {
     log('FRONTEND', '✓ Frontend loaded successfully');
   });
 
-  mainWindow.webContents.on('crashed', (event, killed) => {
-    log('FRONTEND', `Renderer process crashed (killed: ${killed})`, true);
+  // 'crashed' no longer exists in Electron 39; 'render-process-gone' is its replacement.
+  // Reload so a renderer crash does not leave the cashier with a blank window.
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    log('FRONTEND', `Renderer process gone (reason: ${details.reason}, exitCode: ${details.exitCode})`, true);
+    if (details.reason !== 'clean-exit' && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.reload();
+    }
   });
 
   if (isDev) {
@@ -1032,10 +1070,17 @@ async function createWindow() {
     // PRODUCTION MODE
     log('APP', '=== PRODUCTION MODE - Starting Application ===');
 
-    // Wait for backend to be ready (reduced timeout to 10 seconds for faster error feedback)
-    log('BACKEND', 'Waiting for backend server to be ready (max 10 seconds)...');
+    // Show a window straight away so the cashier sees the app is starting, not nothing
+    const loadingHtml = '<!doctype html><meta charset="utf-8"><body style="margin:0;display:flex;align-items:center;' +
+      'justify-content:center;height:100vh;font-family:Segoe UI,Arial,sans-serif;background:#f5f7fa;color:#333">' +
+      '<div style="text-align:center"><h2 style="margin:0 0 8px">Shop Operating Platform</h2><p>Starting, please wait…</p></div>';
+    await mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(loadingHtml));
+    mainWindow.show();
+
+    // Wait for the backend (up to 60 s: a cold start on a slow PC can take well over 10 s)
+    log('BACKEND', 'Waiting for backend server to be ready (max 60 seconds)...');
     try {
-      await waitForServer('http://localhost:4000/api/health', 20, 500);
+      await waitForServer('http://localhost:4000/api/health', 120, 500);
       log('BACKEND', '✓ Backend server is ready!');
     } catch (error) {
       log('BACKEND', `Backend server not available: ${error.message}`, true);
@@ -1099,6 +1144,9 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // A second copy is quitting (see requestSingleInstanceLock above); it must not start a backend
+  if (!gotSingleInstanceLock) return;
+
   // Initialize log file first (before any logging)
   initLogFile();
 
@@ -1126,9 +1174,9 @@ app.whenReady().then(async () => {
   // So backendProcess might be null, which is OK
   if (backendProcess) {
     log('APP', `Backend process created, PID: ${backendProcess.pid}`);
-    log('APP', 'Waiting 3 seconds for backend to initialize...');
-    // Give backend time to start
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    // Brief pause only to catch a backend that dies immediately (e.g. missing module);
+    // readiness itself is detected by the health check in createWindow()
+    await new Promise(resolve => setTimeout(resolve, 500));
 
     // Check if backend process is still alive
     if (backendProcess.killed || backendProcess.exitCode !== null) {
@@ -1145,6 +1193,8 @@ app.whenReady().then(async () => {
       }
       return;
     }
+  } else if (usingExistingBackend) {
+    log('APP', 'Using the backend that was already running on port 4000');
   } else if (isDev) {
     log('APP', 'Dev mode: Backend may already be running separately');
     log('APP', 'Waiting 2 seconds for backend to be ready...');

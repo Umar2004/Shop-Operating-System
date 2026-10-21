@@ -449,7 +449,7 @@ router.get('/printer', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) 
     res.json({
       name: nameSetting?.value || '',
       paperSize: paperSizeSetting?.value || '80',
-      silentPrint: silentPrintSetting?.value === 'true' || true,
+      silentPrint: silentPrintSetting ? silentPrintSetting.value === 'true' : true,
       autoCut: autoCutSetting?.value === 'true' || false,
       printLogo: printLogoSetting?.value === 'true' || false,
       useDirect: useDirectSetting?.value === 'true' || false,

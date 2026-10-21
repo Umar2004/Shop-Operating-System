@@ -320,7 +320,8 @@ function Sell() {
       try {
         if (enablePrinting) {
           const printerSettings = await api.getPrinterSettings();
-          if (printerSettings.name) {
+          // Direct USB printing does not use a Windows printer name
+          if (printerSettings.name || printerSettings.useDirect) {
             // Fetch full invoice details for printing
             const fullInvoice = await api.getInvoice(res.invoice.id);
 
@@ -329,13 +330,13 @@ function Sell() {
             let logoUrl = null;
             let receiptSettings = {};
             try {
-              const shopSetting = await api.getSetting('shop.name');
-              shopName = shopSetting?.value || 'Shop Operating Platform';
+              // Shop name and logo path in one request (public endpoint)
+              const shopInfo = await api.getShopInfo();
+              shopName = shopInfo?.name || 'Shop Operating Platform';
 
               // Get logo URL if printLogo is enabled
               if (printerSettings.printLogo) {
-                const logoSetting = await api.getSetting('shop.logo_path');
-                if (logoSetting?.value) {
+                if (shopInfo?.logo_path) {
                   // Logo is served at /api/settings/logo endpoint
                   // Use API base URL to ensure it's accessible from print window
                   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
@@ -382,8 +383,9 @@ function Sell() {
           }
         }
       } catch (printErr) {
-        // Log error but don't show toast - invoice was created successfully
+        // The sale is already saved; tell the cashier the receipt did not print so they can reprint it
         console.error('Auto-print failed:', printErr);
+        toast.warning(`Sale saved, but the receipt did not print (${printErr.message || 'printer error'}). Reprint it from Invoices.`);
       }
 
       // Show balance dialog if there's change

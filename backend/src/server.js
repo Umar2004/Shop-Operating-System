@@ -279,8 +279,20 @@ if (process.env.SERVE_FRONTEND === 'true') {
   }
 }
 
-app.listen(PORT, HOST, () => {
+// Express 5 passes a listen error to this callback; only report "listening" when it really is
+const server = app.listen(PORT, HOST, (err) => {
+  if (err) return; // handled by the 'error' listener below
   console.log(`Backend API listening on http://${HOST}:${PORT}`);
+});
+
+// Without this an occupied port leaves a process that logs "listening" but serves nothing
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. Another copy of the app (or another program) is running on it.`);
+  } else {
+    console.error('HTTP server error:', err);
+  }
+  process.exit(1);
 });
 
 
