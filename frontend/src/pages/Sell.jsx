@@ -249,16 +249,19 @@ function Sell() {
         return;
       }
 
-      // Validate: Cash payments must be >= total and cannot be zero
-      const cashPayments = payments.filter((p) => p.type === 'CASH');
-      for (const cashPayment of cashPayments) {
-        if (cashPayment.amount === 0) {
-          toast.error('Cash payment amount cannot be zero');
-          return;
-        }
-        if (cashPayment.amount > 0 && Math.round(cashPayment.amount * 100) < Math.round(finalTotal * 100)) {
-          toast.error(`Cash payment amount (${formatCurrency(cashPayment.amount)}) must be greater than or equal to the total (${formatCurrency(finalTotal)})`);
-          return;
+      // Validate: without a customer, cash must cover the total and cannot be zero.
+      // With a customer selected, a smaller amount is a part-payment and the shortfall goes on their credit.
+      if (!customer) {
+        const cashPayments = payments.filter((p) => p.type === 'CASH');
+        for (const cashPayment of cashPayments) {
+          if (cashPayment.amount === 0) {
+            toast.error('Cash payment amount cannot be zero');
+            return;
+          }
+          if (cashPayment.amount > 0 && Math.round(cashPayment.amount * 100) < Math.round(finalTotal * 100)) {
+            toast.error(`Cash payment amount (${formatCurrency(cashPayment.amount)}) must be greater than or equal to the total (${formatCurrency(finalTotal)})`);
+            return;
+          }
         }
       }
 
@@ -297,8 +300,14 @@ function Sell() {
       setCustomer(null);
       setSelectedCartItemId(null);
 
-      // Show success message
-      toast.success(`Invoice ${res.invoice.invoice_number} created for ${customerName}`);
+      // Show success message (say how much went on the customer's credit, if any)
+      const paidNow = payments.filter((p) => p.type !== 'CREDIT').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const onCredit = (Math.round(res.invoice.total_amount * 100) - Math.round(paidNow * 100)) / 100;
+      toast.success(
+        customer && onCredit > 0
+          ? `Invoice ${res.invoice.invoice_number} created for ${customerName}. ${formatCurrency(onCredit)} added to their credit balance.`
+          : `Invoice ${res.invoice.invoice_number} created for ${customerName}`
+      );
 
       // Auto-print invoice if enabled
       try {
@@ -1163,7 +1172,8 @@ function Sell() {
               disabled={
                 submitting ||
                 cart.length === 0 ||
-                (payments.some((p) => p.type === 'CASH' && (p.amount === 0 || Math.round(p.amount * 100) < Math.round(finalTotal * 100))))
+                // Full cash payment is only required when no customer is selected (otherwise the rest goes on credit)
+                (!customer && payments.some((p) => p.type === 'CASH' && (p.amount === 0 || Math.round(p.amount * 100) < Math.round(finalTotal * 100))))
               }
             >
               Pay {formatCurrency(finalTotal)}
