@@ -1102,16 +1102,21 @@ function Sell() {
                           )
                         );
                       }}
-                      inputProps={{ min: p.type === 'CASH' ? finalTotal : 0, step: getInputStep() }}
+                      // Same rule as the Pay button: full cash is only required when no customer is selected;
+                      // with a customer, a smaller amount is a valid part-payment (the rest goes to credit)
+                      inputProps={{ min: p.type === 'CASH' && !customer ? finalTotal : 0, step: getInputStep() }}
                       error={
-                        p.type === 'CASH' && (p.amount === 0 || (p.amount > 0 && p.amount < finalTotal))
+                        p.type === 'CASH' && !customer &&
+                        (p.amount === 0 || (p.amount > 0 && Math.round(p.amount * 100) < Math.round(finalTotal * 100)))
                       }
                       helperText={
-                        p.type === 'CASH' && p.amount === 0
+                        p.type === 'CASH' && !customer && p.amount === 0
                           ? 'Cash amount cannot be zero'
-                          : p.type === 'CASH' && p.amount > 0 && p.amount < finalTotal
+                          : p.type === 'CASH' && !customer && p.amount > 0 && Math.round(p.amount * 100) < Math.round(finalTotal * 100)
                             ? `Cash amount must be >= ${formatCurrency(finalTotal)}`
-                            : ''
+                            : p.type === 'CASH' && customer && Math.round(p.amount * 100) < Math.round(finalTotal * 100)
+                              ? 'Part-payment: the rest goes to the customer\'s credit'
+                              : ''
                       }
                     />
                     {payments.length > 1 && (
