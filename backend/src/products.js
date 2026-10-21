@@ -348,10 +348,11 @@ router.post(
       const name = String(data['Product Name'] || '').trim();
       const categoryName = String(data.Category || '').trim();
       const unit = String(data.Unit || '').trim() || null;
-      const costPriceStr = String(data['Cost Price'] || '').trim();
-      const sellingPriceStr = String(data['Selling Price'] || '').trim();
-      const openingStockStr = String(data['Opening Stock'] || '').trim();
-      const minimumStockStr = String(data['Minimum Stock'] || '').trim();
+      // `?? ''`, not `|| ''`: a numeric 0 from Excel is a real value, not a missing one
+      const costPriceStr = String(data['Cost Price'] ?? '').trim();
+      const sellingPriceStr = String(data['Selling Price'] ?? '').trim();
+      const openingStockStr = String(data['Opening Stock'] ?? '').trim();
+      const minimumStockStr = String(data['Minimum Stock'] ?? '').trim();
       const mfdStr = String(data.MFD || '').trim();
       const expStr = String(data.EXP || '').trim();
       const statusText = String(data.Status || 'ACTIVE').trim().toUpperCase() || 'ACTIVE';
@@ -379,17 +380,17 @@ router.post(
         }
       }
 
-      // Validate Cost Price
+      // Validate Cost Price (must be > 0, the same rule the import step applies)
       const costPrice = Number(costPriceStr);
-      if (!costPriceStr || Number.isNaN(costPrice) || costPrice < 0) {
-        errors['Cost Price'] = 'Cost Price must be a valid positive number';
+      if (!costPriceStr || Number.isNaN(costPrice) || costPrice <= 0) {
+        errors['Cost Price'] = 'Cost Price must be greater than zero';
         isValid = false;
       }
 
-      // Validate Selling Price
+      // Validate Selling Price (must be > 0, the same rule the import step applies)
       const sellingPrice = Number(sellingPriceStr);
-      if (!sellingPriceStr || Number.isNaN(sellingPrice) || sellingPrice < 0) {
-        errors['Selling Price'] = 'Selling Price must be a valid positive number';
+      if (!sellingPriceStr || Number.isNaN(sellingPrice) || sellingPrice <= 0) {
+        errors['Selling Price'] = 'Selling Price must be greater than zero';
         isValid = false;
       } else if (costPriceStr && !Number.isNaN(costPrice) && priceNotAboveCost(costPrice, sellingPrice)) {
         // Importable, but only after the user confirms (see /bulk-upload/import confirmLowMargin)
@@ -550,7 +551,8 @@ router.post(
 
         // Helper function to validate and parse numbers
         const parseNumber = (value, fieldName, allowZero = true) => {
-          const str = String(value || '').trim();
+          // `?? ''`, not `|| ''`: a numeric 0 from Excel is a real value, not a missing one
+          const str = String(value ?? '').trim();
           if (!str) {
             return { valid: false, value: null, error: `${fieldName} is required` };
           }
