@@ -29,6 +29,30 @@ const getBackupDir = () => {
   return defaultBackupsDir;
 };
 
+// Back up the live database to `finalPath` atomically: SQLite backup API -> integrity check -> rename.
+// Throws (and leaves no file at finalPath) if any step fails.
+const writeVerifiedBackup = async (finalPath) => {
+  const partialPath = `${finalPath}.partial`;
+  try {
+    await db.backup(partialPath);
+    const Database = require('better-sqlite3');
+    const check = new Database(partialPath, { readonly: true, fileMustExist: true });
+    let result;
+    try {
+      result = check.pragma('integrity_check', { simple: true });
+    } finally {
+      check.close();
+    }
+    if (result !== 'ok') {
+      throw new Error(`Backup failed verification: ${result}`);
+    }
+    fs.renameSync(partialPath, finalPath);
+  } catch (err) {
+    try { fs.unlinkSync(partialPath); } catch (_) {}
+    throw err;
+  }
+};
+
 // Create a backup
 const createBackup = async () => {
   try {
@@ -68,15 +92,9 @@ const createBackup = async () => {
     
     console.log(`[BACKUP SCHEDULER] ✓ Database found at: ${dbPath}`);
     
-    // Use better-sqlite3 backup method if available, otherwise copy file
-    try {
-      const backupPromise = db.backup(backupPath);
-      if (backupPromise && typeof backupPromise.then === 'function') {
-        await backupPromise;
-      }
-    } catch (backupErr) {
-      fs.copyFileSync(dbPath, backupPath);
-    }
+    // Write to a .partial file, verify it, then rename: an interrupted backup can never look like a real one.
+    // (No raw file-copy fallback: copying a live database file can produce a corrupt backup.)
+    await writeVerifiedBackup(backupPath);
 
     // Verify backup was created successfully
     if (!fs.existsSync(backupPath)) {
@@ -248,5 +266,6 @@ module.exports = {
   updateScheduler,
   createBackup,
   cleanupOldBackups,
+  writeVerifiedBackup,
 };
 

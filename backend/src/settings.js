@@ -8,6 +8,21 @@ const multer = require('multer');
 
 const router = express.Router();
 
+// A backup is only usable if SQLite says the whole file is intact and the core tables are present.
+// ('SELECT 1' only proves the header and schema can be read, not the data pages.)
+const REQUIRED_BACKUP_TABLES = ['products', 'invoices', 'invoice_items', 'payments', 'customers', 'sessions', 'settings', 'users'];
+function assertUsableBackup(testDb) {
+  const integrity = testDb.pragma('integrity_check', { simple: true });
+  if (integrity !== 'ok') {
+    throw new Error(`Backup file failed the integrity check (${integrity})`);
+  }
+  const tables = new Set(testDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name));
+  const missing = REQUIRED_BACKUP_TABLES.filter((t) => !tables.has(t));
+  if (missing.length > 0) {
+    throw new Error(`Backup file is missing tables: ${missing.join(', ')}`);
+  }
+}
+
 // Ensure directories exist
 // In production, use environment variables if set
 // If not set, use user data directory to avoid permission issues in Program Files
@@ -117,7 +132,16 @@ const backupStorage = multer.diskStorage({
     }
   },
   filename: (req, file, cb) => {
-    cb(null, file.originalname);
+    // Keep only a plain file name (a crafted name like "..\\data\\sop.db" must not escape the folder)
+    // and never overwrite an existing backup
+    const safeName = path.basename(String(file.originalname).replace(/\\/g, '/')).replace(/[^\w.\- ]/g, '_');
+    let finalName = safeName;
+    try {
+      if (fs.existsSync(path.join(getBackupDir(), finalName))) {
+        finalName = safeName.replace(/\.db$/i, '') + `_uploaded_${Date.now()}.db`;
+      }
+    } catch (_) {}
+    cb(null, finalName);
   },
 });
 
@@ -764,21 +788,13 @@ router.post('/backup', requireRole(['ADMIN']), async (req, res) => {
     
     console.log(`[BACKUP] ✓ Database found at: ${dbPath}`);
     
-    // Use better-sqlite3 backup method if available, otherwise copy file
-    try {
-      // Try the backup method (returns promise in newer versions)
-      const backupPromise = db.backup(backupPath);
-      if (backupPromise && typeof backupPromise.then === 'function') {
-        await backupPromise;
-      }
-    } catch (backupErr) {
-      // Fallback: copy file directly
-      fs.copyFileSync(dbPath, backupPath);
-    }
+    // Write to a .partial file, verify it, then rename (see backupScheduler.writeVerifiedBackup)
+    const { writeVerifiedBackup } = require('./backupScheduler');
+    await writeVerifiedBackup(backupPath);
 
     // Verify backup was created successfully
     if (!fs.existsSync(backupPath)) {
-      return res.status(500).json({ 
+      return res.status(500).json({
         message: 'Backup file was not created successfully' 
       });
     }
@@ -876,11 +892,7 @@ router.post('/backup/upload', requireRole(['ADMIN']), (req, res, next) => {
       testDb = new Database(uploadedFilePath, { readonly: true });
       
       // Try a simple query to validate the database
-      const result = testDb.prepare('SELECT 1 as test').get();
-      
-      if (!result || result.test !== 1) {
-        throw new Error('Database validation query failed');
-      }
+      assertUsableBackup(testDb);
       
       // Close the database properly
       testDb.close();
@@ -954,6 +966,11 @@ router.post('/backup/restore/:filename', requireRole(['ADMIN']), async (req, res
   try {
     const { filename } = req.params;
     const backupDir = getBackupDir();
+
+    // Validate filename to prevent directory traversal (same rule as the delete endpoint)
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ message: 'Invalid filename' });
+    }
     const backupPath = path.join(backupDir, filename);
 
     if (!fs.existsSync(backupPath)) {
@@ -965,7 +982,7 @@ router.post('/backup/restore/:filename', requireRole(['ADMIN']), async (req, res
     try {
       const Database = require('better-sqlite3');
       testDb = new Database(backupPath, { readonly: true });
-      testDb.prepare('SELECT 1').get();
+      assertUsableBackup(testDb);
       testDb.close();
       testDb = null;
     } catch (dbErr) {
@@ -1074,7 +1091,7 @@ router.delete('/backup/:filename', requireRole(['ADMIN', 'MANAGER', 'CASHIER']),
 });
 
 // Reset system (clear all data except admin user and system tables)
-router.post('/reset', requireRole(['ADMIN']), (req, res) => {
+router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
   try {
     const { confirmation } = req.body;
     if (confirmation !== 'RESET') {
@@ -1089,6 +1106,18 @@ router.post('/reset', requireRole(['ADMIN']), (req, res) => {
 
     // Get admin role ID
     const adminRole = db.prepare('SELECT id FROM roles WHERE name = ?').get('ADMIN');
+
+    // Never wipe the shop's data without a verified copy to come back to
+    const preResetPath = path.join(
+      getBackupDir(),
+      `pre_reset_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.db`
+    );
+    try {
+      const { writeVerifiedBackup } = require('./backupScheduler');
+      await writeVerifiedBackup(preResetPath);
+    } catch (backupErr) {
+      return res.status(500).json({ message: `Reset cancelled: could not create a backup first (${backupErr.message})` });
+    }
 
     // Delete all data from tables (in correct order to respect foreign keys)
     const tablesToClear = [
@@ -1105,9 +1134,12 @@ router.post('/reset', requireRole(['ADMIN']), (req, res) => {
     ];
 
     db.exec('PRAGMA foreign_keys = OFF');
-    tablesToClear.forEach((table) => {
-      db.prepare(`DELETE FROM ${table}`).run();
-    });
+    // All-or-nothing: a failure part-way must not leave half the data deleted
+    db.transaction(() => {
+      tablesToClear.forEach((table) => {
+        db.prepare(`DELETE FROM ${table}`).run();
+      });
+    })();
 
     // Reset sequences/auto-increment
     db.exec('DELETE FROM sqlite_sequence WHERE name IN (' + tablesToClear.map(() => '?').join(',') + ')', tablesToClear);
@@ -1130,7 +1162,7 @@ router.post('/reset', requireRole(['ADMIN']), (req, res) => {
 
     db.exec('PRAGMA foreign_keys = ON');
 
-    res.json({ message: 'System reset successfully. All data cleared except admin user.' });
+    res.json({ message: 'System reset successfully. All data cleared except admin user.', backup: path.basename(preResetPath) });
   } catch (err) {
     console.error('Reset error:', err);
     res.status(500).json({ message: err.message || 'Failed to reset system' });
