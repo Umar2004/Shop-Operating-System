@@ -24,8 +24,10 @@ import {
   Chip,
   Autocomplete,
   InputAdornment,
+  useMediaQuery,
 } from '@mui/material';
-import { Edit, Delete, Payment, Visibility, Add, Remove } from '@mui/icons-material';
+import { useTheme } from '@mui/material/styles';
+import { Edit, Delete, Payment, Visibility, Add, Remove, Close } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { useConfirmDialog } from '../utils/confirmDialog';
@@ -37,6 +39,10 @@ function Customers() {
   const [search, setSearch] = useState('');
   const [openDialog, setOpenDialog] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
+  // The details dialog has its own open flag: Pay Credit from the list also selects a customer
+  const [detailOpen, setDetailOpen] = useState(false);
+  const theme = useTheme();
+  const fullScreenDetail = useMediaQuery(theme.breakpoints.down('sm'));
   const [customerInvoices, setCustomerInvoices] = useState([]);
   const [customerPayments, setCustomerPayments] = useState([]);
   const [openPayCreditDialog, setOpenPayCreditDialog] = useState(false);
@@ -119,6 +125,26 @@ function Customers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomer?.id]);
 
+  const openCustomerDetail = (c) => {
+    if (selectedCustomer?.id === c.id) {
+      // Same customer: the effect above won't re-run, so refresh here
+      loadCustomerData(c.id);
+    } else {
+      // Clear the previous customer's rows so they never show under this customer's name
+      setCustomerInvoices([]);
+      setCustomerPayments([]);
+      setSelectedCustomer(c);
+    }
+    setDetailOpen(true);
+  };
+
+  const closeCustomerDetail = () => {
+    setDetailOpen(false);
+    setSelectedCustomer(null);
+    setCustomerInvoices([]);
+    setCustomerPayments([]);
+  };
+
   return (
     <Box>
       <Typography variant="h5" gutterBottom>
@@ -177,9 +203,7 @@ function Customers() {
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  if (selectedCustomer?.id !== c.id) {
-                    setSelectedCustomer(c);
-                  }
+                  openCustomerDetail(c);
                 }}
               >
                 <TableCell>{c.name}</TableCell>
@@ -239,275 +263,307 @@ function Customers() {
         </Table>
       </Paper>
 
-      {selectedCustomer && (
-        <Paper sx={{ p: 2, mt: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Typography variant="h6">
+      {/* Customer details: a dialog instead of a panel under the list (closes on X, click outside, Esc) */}
+      <Dialog
+        open={detailOpen && !!selectedCustomer}
+        onClose={closeCustomerDetail}
+        fullWidth
+        maxWidth="lg"
+        fullScreen={fullScreenDetail}
+        scroll="paper"
+        aria-labelledby="customer-detail-title"
+      >
+        {selectedCustomer && (
+          <>
+            <DialogTitle id="customer-detail-title" sx={{ pr: 6 }}>
               {selectedCustomer.name} - Details
-            </Typography>
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setSelectedCustomer(null);
-                setCustomerInvoices([]);
-                setCustomerPayments([]);
-              }}
-            >
-              Close
-            </Button>
-          </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" color="text.secondary" component="span">
-                  Credit Limit:
-                </Typography>
-                <Typography variant="body2" fontWeight="bold">
-                  {(selectedCustomer.credit_limit || 0).toFixed(2)}
-                </Typography>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" color="text.secondary" component="span">
-                  Remaining Past Credit:
-                </Typography>
-                {(() => {
-                  const totalUnpaidInvoices = customerInvoices.reduce((acc, inv) => 
-                    acc + (inv.payment_status !== 'PAID' ? (inv.balance_amount || 0) : 0), 0);
-                  const pastCredit = Math.max(0, (selectedCustomer.current_balance || 0) - totalUnpaidInvoices);
-                  return (
-                    <Typography variant="body2" fontWeight="bold" color={pastCredit > 0 ? 'warning.main' : 'inherit'}>
-                      {pastCredit.toFixed(2)}
+              <IconButton
+                aria-label="Close"
+                onClick={closeCustomerDetail}
+                sx={{ position: 'absolute', right: 8, top: 8 }}
+              >
+                <Close />
+              </IconButton>
+            </DialogTitle>
+            <DialogContent dividers>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: { xs: 1, sm: 3 }, mb: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary" component="span">
+                      Phone:
                     </Typography>
-                  );
-                })()}
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" color="text.secondary" component="span">
-                  Total Balance Owed:
-                </Typography>
-                <Chip
-                  label={Math.max(0, selectedCustomer.current_balance || 0).toFixed(2)}
-                  color={(selectedCustomer.current_balance || 0) > 0 ? 'error' : 'default'}
-                  size="small"
-                  sx={{ fontWeight: 600 }}
-                />
-              </Box>
-            </Box>
-          <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)} sx={{ mb: 2 }}>
-            <Tab label="Invoices" />
-            <Tab label="Payment History" />
-          </Tabs>
+                    <Typography variant="body2" fontWeight="bold">
+                      {selectedCustomer.phone || '-'}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary" component="span">
+                      Address:
+                    </Typography>
+                    <Typography variant="body2" fontWeight="bold">
+                      {selectedCustomer.address || '-'}
+                    </Typography>
+                  </Box>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: { xs: 1, sm: 3 } }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary" component="span">
+                      Credit Limit:
+                    </Typography>
+                    <Typography variant="body2" fontWeight="bold">
+                      {(selectedCustomer.credit_limit || 0).toFixed(2)}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary" component="span">
+                      Remaining Past Credit:
+                    </Typography>
+                    {(() => {
+                      const totalUnpaidInvoices = customerInvoices.reduce((acc, inv) => 
+                        acc + (inv.payment_status !== 'PAID' ? (inv.balance_amount || 0) : 0), 0);
+                      const pastCredit = Math.max(0, (selectedCustomer.current_balance || 0) - totalUnpaidInvoices);
+                      return (
+                        <Typography variant="body2" fontWeight="bold" color={pastCredit > 0 ? 'warning.main' : 'inherit'}>
+                          {pastCredit.toFixed(2)}
+                        </Typography>
+                      );
+                    })()}
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="body2" color="text.secondary" component="span">
+                      Total Balance Owed:
+                    </Typography>
+                    <Chip
+                      label={Math.max(0, selectedCustomer.current_balance || 0).toFixed(2)}
+                      color={(selectedCustomer.current_balance || 0) > 0 ? 'error' : 'default'}
+                      size="small"
+                      sx={{ fontWeight: 600 }}
+                    />
+                  </Box>
+                </Box>
+              <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)} sx={{ mb: 2 }}>
+                <Tab label="Invoices" />
+                <Tab label="Payment History" />
+              </Tabs>
 
-          {tabValue === 0 && (
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Invoices ({customerInvoices.length})
-              </Typography>
-              {customerInvoices.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No invoices found for this customer.
-                </Typography>
-              ) : (
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Invoice #</TableCell>
-                      <TableCell>Date</TableCell>
-                      <TableCell>Total Amount</TableCell>
-                      <TableCell>Discount</TableCell>
-                      <TableCell>Paid</TableCell>
-                      <TableCell>Balance</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {customerInvoices.map((inv) => (
-                      <TableRow key={inv.id}>
-                        <TableCell>{inv.invoice_number}</TableCell>
-                        <TableCell>
-                          {new Date(inv.date_time).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell>{inv.total_amount.toFixed(2)}</TableCell>
-                        <TableCell>{inv.discount.toFixed(2)}</TableCell>
-                        <TableCell>{(inv.paid_amount || 0).toFixed(2)}</TableCell>
-                        <TableCell sx={{ color: (inv.balance_amount || 0) > 0 ? 'error.main' : 'inherit', fontWeight: (inv.balance_amount || 0) > 0 ? 600 : 400 }}>
-                          {(inv.balance_amount || 0).toFixed(2)}
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={inv.payment_status}
-                            color={
-                              inv.payment_status === 'PAID'
-                                ? 'success'
-                                : inv.payment_status === 'PARTIAL'
-                                  ? 'warning'
-                                  : 'error'
-                            }
-                            size="small"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedStatusInvoice(inv);
-                              setNewStatus(inv.payment_status);
-                              setOpenStatusDialog(true);
-                            }}
-                            sx={{ cursor: 'pointer' }}
-                          />
-                        </TableCell>
-                        <TableCell align="right">
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              try {
-                                const details = await api.getInvoice(inv.id);
-                                setInvoiceDetails(details);
-                                setOpenViewInvoiceDialog(true);
-                              } catch (err) {
-                                toast.error(err.message);
-                              }
-                            }}
-                          >
-                            <Visibility fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              try {
-                                const details = await api.getInvoice(inv.id);
-                                setInvoiceDetails(details);
-                                setEditDiscount(details.invoice.discount || 0);
-                                setEditAdditionalAmount(details.invoice.additional_amount || 0);
-                                // Initialize edit items from invoice details
-                                setEditItems(
-                                  details.items.map((item) => ({
-                                    productId: item.product_id,
-                                    product: { id: item.product_id, name: item.product_name },
-                                    quantity: item.quantity,
-                                    unitPrice: item.unit_price,
-                                    lineTotal: item.line_total,
-                                  }))
-                                );
-                                // Load products and customers for autocomplete
-                                const [productsData, customersData] = await Promise.all([
-                                  api.listProducts(),
-                                  api.listCustomers(),
-                                ]);
-                                setProducts(productsData);
-                                setCustomersForEdit(customersData);
-                                // Set customer if exists
-                                if (details.invoice.customer_id) {
-                                  const customer = customersData.find(
-                                    (c) => c.id === details.invoice.customer_id
+              {tabValue === 0 && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Invoices ({customerInvoices.length})
+                  </Typography>
+                  {customerInvoices.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No invoices found for this customer.
+                    </Typography>
+                  ) : (
+                    <Box sx={{ overflowX: 'auto' }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Invoice #</TableCell>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Total Amount</TableCell>
+                          <TableCell>Discount</TableCell>
+                          <TableCell>Paid</TableCell>
+                          <TableCell>Balance</TableCell>
+                          <TableCell>Status</TableCell>
+                          <TableCell align="right">Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {customerInvoices.map((inv) => (
+                          <TableRow key={inv.id}>
+                            <TableCell>{inv.invoice_number}</TableCell>
+                            <TableCell>
+                              {new Date(inv.date_time).toLocaleDateString()}
+                            </TableCell>
+                            <TableCell>{inv.total_amount.toFixed(2)}</TableCell>
+                            <TableCell>{inv.discount.toFixed(2)}</TableCell>
+                            <TableCell>{(inv.paid_amount || 0).toFixed(2)}</TableCell>
+                            <TableCell sx={{ color: (inv.balance_amount || 0) > 0 ? 'error.main' : 'inherit', fontWeight: (inv.balance_amount || 0) > 0 ? 600 : 400 }}>
+                              {(inv.balance_amount || 0).toFixed(2)}
+                            </TableCell>
+                            <TableCell>
+                              <Chip
+                                label={inv.payment_status}
+                                color={
+                                  inv.payment_status === 'PAID'
+                                    ? 'success'
+                                    : inv.payment_status === 'PARTIAL'
+                                      ? 'warning'
+                                      : 'error'
+                                }
+                                size="small"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedStatusInvoice(inv);
+                                  setNewStatus(inv.payment_status);
+                                  setOpenStatusDialog(true);
+                                }}
+                                sx={{ cursor: 'pointer' }}
+                              />
+                            </TableCell>
+                            <TableCell align="right">
+                              <IconButton
+                                size="small"
+                                color="primary"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    const details = await api.getInvoice(inv.id);
+                                    setInvoiceDetails(details);
+                                    setOpenViewInvoiceDialog(true);
+                                  } catch (err) {
+                                    toast.error(err.message);
+                                  }
+                                }}
+                              >
+                                <Visibility fontSize="small" />
+                              </IconButton>
+                              <IconButton
+                                size="small"
+                                color="primary"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    const details = await api.getInvoice(inv.id);
+                                    setInvoiceDetails(details);
+                                    setEditDiscount(details.invoice.discount || 0);
+                                    setEditAdditionalAmount(details.invoice.additional_amount || 0);
+                                    // Initialize edit items from invoice details
+                                    setEditItems(
+                                      details.items.map((item) => ({
+                                        productId: item.product_id,
+                                        product: { id: item.product_id, name: item.product_name },
+                                        quantity: item.quantity,
+                                        unitPrice: item.unit_price,
+                                        lineTotal: item.line_total,
+                                      }))
+                                    );
+                                    // Load products and customers for autocomplete
+                                    const [productsData, customersData] = await Promise.all([
+                                      api.listProducts(),
+                                      api.listCustomers(),
+                                    ]);
+                                    setProducts(productsData);
+                                    setCustomersForEdit(customersData);
+                                    // Set customer if exists
+                                    if (details.invoice.customer_id) {
+                                      const customer = customersData.find(
+                                        (c) => c.id === details.invoice.customer_id
+                                      );
+                                      setEditCustomer(customer || null);
+                                    } else {
+                                      setEditCustomer(null);
+                                    }
+                                    setOpenEditInvoiceDialog(true);
+                                  } catch (err) {
+                                    toast.error(err.message);
+                                  }
+                                }}
+                              >
+                                <Edit fontSize="small" />
+                              </IconButton>
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  confirm(
+                                    `Delete invoice ${inv.invoice_number}? This will restore product stock.`,
+                                    async () => {
+                                      try {
+                                        await api.deleteInvoice(inv.id);
+                                        toast.success('Invoice deleted');
+                                        loadCustomerData(selectedCustomer.id);
+                                        load();
+                                      } catch (err) {
+                                        toast.error(err.message);
+                                      }
+                                    }
                                   );
-                                  setEditCustomer(customer || null);
-                                } else {
-                                  setEditCustomer(null);
-                                }
-                                setOpenEditInvoiceDialog(true);
-                              } catch (err) {
-                                toast.error(err.message);
-                              }
-                            }}
-                          >
-                            <Edit fontSize="small" />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              confirm(
-                                `Delete invoice ${inv.invoice_number}? This will restore product stock.`,
-                                async () => {
-                                  try {
-                                    await api.deleteInvoice(inv.id);
-                                    toast.success('Invoice deleted');
-                                    loadCustomerData(selectedCustomer.id);
-                                    load();
-                                  } catch (err) {
-                                    toast.error(err.message);
-                                  }
-                                }
-                              );
-                            }}
-                          >
-                            <Delete fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                                }}
+                              >
+                                <Delete fontSize="small" />
+                              </IconButton>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    </Box>
+                  )}
+                </Box>
               )}
-            </Box>
-          )}
 
-          {tabValue === 1 && (
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Payment History ({customerPayments.length})
-              </Typography>
-              {customerPayments.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
-                  No payments found for this customer.
-                </Typography>
-              ) : (
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Date</TableCell>
-                      <TableCell>Invoice #</TableCell>
-                      <TableCell>Payment Type</TableCell>
-                      <TableCell>Amount</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {customerPayments.map((pay) => (
-                      <TableRow key={pay.id}>
-                        <TableCell>
-                          {new Date(pay.created_at).toLocaleString()}
-                        </TableCell>
-                        <TableCell>{pay.invoice_number || 'Past Credit'}</TableCell>
-                        <TableCell>
-                          <Chip label={pay.payment_type} size="small" />
-                        </TableCell>
-                        <TableCell>{pay.amount.toFixed(2)}</TableCell>
-                        <TableCell align="right">
-                          <IconButton
-                            size="small"
-                            color="error"
-                            onClick={() => {
-                              if (window.confirm(`Delete payment of ${pay.amount.toFixed(2)}? This will update customer balance.`)) {
-                                (async () => {
-                                  try {
-                                    await api.deletePayment(pay.id);
-                                    toast.success('Payment deleted');
-                                    loadCustomerData(selectedCustomer.id);
-                                    load();
-                                  } catch (err) {
-                                    toast.error(err.message);
+              {tabValue === 1 && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Payment History ({customerPayments.length})
+                  </Typography>
+                  {customerPayments.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      No payments found for this customer.
+                    </Typography>
+                  ) : (
+                    <Box sx={{ overflowX: 'auto' }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Invoice #</TableCell>
+                          <TableCell>Payment Type</TableCell>
+                          <TableCell>Amount</TableCell>
+                          <TableCell align="right">Actions</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {customerPayments.map((pay) => (
+                          <TableRow key={pay.id}>
+                            <TableCell>
+                              {new Date(pay.created_at).toLocaleString()}
+                            </TableCell>
+                            <TableCell>{pay.invoice_number || 'Past Credit'}</TableCell>
+                            <TableCell>
+                              <Chip label={pay.payment_type} size="small" />
+                            </TableCell>
+                            <TableCell>{pay.amount.toFixed(2)}</TableCell>
+                            <TableCell align="right">
+                              <IconButton
+                                size="small"
+                                color="error"
+                                onClick={() => {
+                                  if (window.confirm(`Delete payment of ${pay.amount.toFixed(2)}? This will update customer balance.`)) {
+                                    (async () => {
+                                      try {
+                                        await api.deletePayment(pay.id);
+                                        toast.success('Payment deleted');
+                                        loadCustomerData(selectedCustomer.id);
+                                        load();
+                                      } catch (err) {
+                                        toast.error(err.message);
+                                      }
+                                    })();
                                   }
-                                })();
-                              }
-                            }}
-                          >
-                            <Delete fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                                }}
+                              >
+                                <Delete fontSize="small" />
+                              </IconButton>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    </Box>
+                  )}
+                </Box>
               )}
-            </Box>
-          )}
-        </Paper>
-      )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={closeCustomerDetail}>Close</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
 
       <Dialog open={openDialog} onClose={() => setOpenDialog(false)} fullWidth>
         <DialogTitle>{form.id ? 'Edit Customer' : 'Add Customer'}</DialogTitle>
