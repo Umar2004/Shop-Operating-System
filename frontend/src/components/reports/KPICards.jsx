@@ -7,7 +7,7 @@ import {
   MdPercent,
   MdDiscount,
 } from 'react-icons/md';
-import { formatCurrency } from '../../utils/numberFormat';
+import { formatCurrency, formatNumber } from '../../utils/numberFormat';
 
 function KPICard({ title, value, subtitle, icon: Icon, trend, loading }) {
   if (loading) {
