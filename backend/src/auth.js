@@ -1,11 +1,34 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const db = require('./db');
 
 const router = express.Router();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+// Each install signs logins with its own random secret, kept next to the database (not inside it, so a
+// backup restored on another PC does not carry it). Created on first start; JWT_SECRET still overrides it.
+function loadOrCreateJwtSecret() {
+  const secretFile = path.join(path.dirname(db.name), '.jwt-secret');
+  try {
+    const existing = fs.readFileSync(secretFile, 'utf8').trim();
+    if (existing.length >= 32) return existing;
+  } catch (_) {
+    // not created yet
+  }
+  const secret = crypto.randomBytes(48).toString('hex');
+  try {
+    fs.writeFileSync(secretFile, secret, { mode: 0o600 });
+  } catch (err) {
+    // Still secure, but logins will not survive a restart until the file can be written
+    console.error(`Could not save login secret to ${secretFile}: ${err.message}`);
+  }
+  return secret;
+}
+
+const JWT_SECRET = process.env.JWT_SECRET || loadOrCreateJwtSecret();
 const JWT_EXPIRES_IN = '8h';
 
 function generateToken(user) {

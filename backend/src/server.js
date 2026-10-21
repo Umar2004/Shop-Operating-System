@@ -27,10 +27,33 @@ startScheduler();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+// Single-PC install: listen on the loopback interface only, so nothing else on the network can connect
+const HOST = process.env.HOST || '127.0.0.1';
+
+// Only the app itself may call the API from a browser context. Any other web page opened on this PC
+// (which could otherwise log in with a known password and read the token) is refused.
+const allowedOrigins = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
+if (process.env.NODE_ENV !== 'production') {
+  // Vite dev server ports used by `npm run dev` (see electron/main.js)
+  [5173, 5174, 5175, 3000, 8080].forEach((p) => {
+    allowedOrigins.add(`http://localhost:${p}`);
+    allowedOrigins.add(`http://127.0.0.1:${p}`);
+  });
+}
+
+// Reject requests addressed to any other host name (protects against DNS-rebinding web pages)
+const allowedHosts = new Set([`localhost:${PORT}`, `127.0.0.1:${PORT}`]);
+app.use((req, res, next) => {
+  if (!allowedHosts.has(String(req.headers.host || '').toLowerCase())) {
+    return res.status(403).json({ message: 'Forbidden host' });
+  }
+  next();
+});
 
 app.use(
   cors({
-    origin: '*', // Allow all origins; can tighten later for production
+    // Requests without an Origin header (same-origin page loads, Electron's health check) are allowed
+    origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)),
   })
 );
 app.use(express.json());
@@ -254,8 +277,8 @@ if (process.env.SERVE_FRONTEND === 'true') {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`Backend API listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Backend API listening on http://${HOST}:${PORT}`);
 });
 
 
