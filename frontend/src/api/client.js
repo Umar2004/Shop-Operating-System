@@ -101,6 +101,9 @@ export const api = {
     }),
   listProducts: (q) =>
     request(q ? `/products?q=${encodeURIComponent(q)}` : '/products'),
+  // Only the columns the Sell screen uses (smaller and faster than listProducts)
+  listProductsForSale: (q) =>
+    request(q ? `/products?view=sell&q=${encodeURIComponent(q)}` : '/products?view=sell'),
   createProduct: (payload) =>
     request('/products', {
       method: 'POST',

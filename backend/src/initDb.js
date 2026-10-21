@@ -330,6 +330,23 @@ function runMigrations() {
     // Ignore if column already exists
   }
 
+  // Indexes for the lookups every sale, receipt, report and the start-up check below make (audit fix-01).
+  // CREATE INDEX IF NOT EXISTS only adds them: no data changes, and an older version simply ignores them.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice   ON invoice_items(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_invoice_items_product   ON invoice_items(product_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_customer       ON invoices(customer_id, date_time);
+    CREATE INDEX IF NOT EXISTS idx_invoices_date           ON invoices(date_time);
+    CREATE INDEX IF NOT EXISTS idx_invoices_session        ON invoices(session_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_invoice        ON payments(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_customer       ON payments(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_session        ON payments(session_id);
+    CREATE INDEX IF NOT EXISTS idx_expenses_session        ON expenses(session_id);
+    CREATE INDEX IF NOT EXISTS idx_products_status_name    ON products(status, name);
+    CREATE INDEX IF NOT EXISTS idx_sessions_status         ON sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_stock_movements_product ON stock_movements(product_id);
+  `);
+
   /* Balance adjustments: explicit write-offs, charges and refunds (see balances.js) */
   const hadAdjustments = !!db
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'balance_adjustments'")

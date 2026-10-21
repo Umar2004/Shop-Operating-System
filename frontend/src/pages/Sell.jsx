@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -37,6 +37,114 @@ import { api } from '../api/client';
 import { formatCurrency, formatNumber, getInputStep, getInputMin } from '../utils/numberFormat';
 import { generateInvoiceHTML } from '../utils/print';
 
+const PRODUCTS_PER_PAGE = 120;
+
+// Receipt settings rarely change: read them once a minute at most, all at the same time
+let receiptCache = null;
+async function receiptSetup() {
+  if (receiptCache && Date.now() - receiptCache.at < 60 * 1000) return receiptCache;
+  const [printerSettings, shopInfo, receiptSettings] = await Promise.all([
+    api.getPrinterSettings(),
+    api.getShopInfo().catch(() => null),
+    api.getReceiptSettings().catch(() => ({})),
+  ]);
+  receiptCache = { at: Date.now(), printerSettings, shopInfo, receiptSettings };
+  return receiptCache;
+}
+
+// The product cards. Memoised: typing a quantity, discount or cash amount does not redraw them.
+const ProductGrid = memo(function ProductGrid({ productsByCategory, onAdd, shown, total, onShowMore }) {
+  return (
+    <>
+      {Object.keys(productsByCategory).length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', mt: 4 }}>
+          No products found
+        </Typography>
+      ) : (
+        Object.entries(productsByCategory).map(([category, categoryProducts]) => (
+          <Box key={category} sx={{ mb: 3 }}>
+            <Typography
+              variant="h6"
+              sx={{
+                mb: 2,
+                pb: 1,
+                borderBottom: '2px solid #e0e0e0',
+                fontWeight: 600,
+                color: 'primary.main',
+              }}
+            >
+              {category} ({categoryProducts.length})
+            </Typography>
+            <Grid container spacing={{ xs: 1, sm: 1.5, md: 2 }}>
+              {categoryProducts.map((product) => (
+                <Grid item xs={6} sm={4} md={4} lg={3} xl={2} key={product.id}>
+                  <Card
+                    sx={{
+                      height: '100%',
+                      cursor: product.availableStock > 0 ? 'pointer' : 'not-allowed',
+                      transition: 'all 0.2s',
+                      opacity: product.availableStock > 0 ? 1 : 0.6,
+                      '&:hover': {
+                        transform: product.availableStock > 0 ? 'translateY(-4px)' : 'none',
+                        boxShadow: product.availableStock > 0 ? 4 : 1,
+                      },
+                      border: product.availableStock <= product.minimum_stock ? '2px solid #f44336' : '1px solid #e0e0e0',
+                    }}
+                    onClick={() => {
+                      if (product.availableStock > 0) {
+                        onAdd(product);
+                      } else {
+                        toast.error(`Insufficient stock for ${product.name}`);
+                      }
+                    }}
+                  >
+                    <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                      <Typography
+                        variant="body2"
+                        fontWeight="bold"
+                        noWrap
+                        sx={{ mb: 0.5 }}
+                      >
+                        {product.name}
+                      </Typography>
+                      <Typography variant="h6" color="primary" sx={{ mb: 0.5 }}>
+                        {formatCurrency(product.selling_price)}
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                        <Chip
+                          label={`Stock: ${product.availableStock}`}
+                          size="small"
+                          color={
+                            product.availableStock <= product.minimum_stock
+                              ? 'error'
+                              : product.availableStock === 0
+                                ? 'default'
+                                : 'default'
+                          }
+                        />
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Box>
+        ))
+      )}
+      {total > shown && (
+        <Box sx={{ textAlign: 'center', my: 2 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+      Showing {shown} of {total} products. Type in the search box to find one quickly.
+          </Typography>
+          <Button variant="outlined" size="small" onClick={onShowMore}>
+      Show more
+          </Button>
+        </Box>
+      )}
+    </>
+  );
+});
+
 function Sell() {
   const [session, setSession] = useState(null);
   const [sessionError, setSessionError] = useState('');
@@ -55,27 +163,25 @@ function Sell() {
   const [enablePrinting, setEnablePrinting] = useState(true);
   const [selectedCartItemId, setSelectedCartItemId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // Only this many product cards are drawn at once (thousands of cards made typing in the cart slow)
+  const [visibleCount, setVisibleCount] = useState(PRODUCTS_PER_PAGE);
 
   useEffect(() => {
     api
       .getCurrentSession()
       .then((data) => setSession(data))
       .catch((err) => setSessionError(err.message));
-
-    api
-      .listProducts()
-      .then((data) => setProducts(data))
-      .catch((err) => toast.error(err.message));
   }, []);
 
-  // Real-time product search
+  // Product list: loaded once on open (no delay) and again while searching (debounced)
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       api
-        .listProducts(search)
+        .listProductsForSale(search)
         .then((data) => setProducts(data))
         .catch((err) => toast.error(err.message));
-    }, 300);
+    }, search ? 300 : 0);
+    setVisibleCount(PRODUCTS_PER_PAGE);
 
     return () => clearTimeout(timeoutId);
   }, [search]);
@@ -103,10 +209,10 @@ function Sell() {
     });
   }, [filteredProducts, cart]);
 
-  // Group products by category
+  // Group products by category (only the cards that are drawn)
   const productsByCategory = useMemo(() => {
     const grouped = {};
-    productsWithAvailableStock.forEach((product) => {
+    productsWithAvailableStock.slice(0, visibleCount).forEach((product) => {
       const category = product.category_name || 'Uncategorized';
       if (!grouped[category]) {
         grouped[category] = [];
@@ -120,13 +226,13 @@ function Sell() {
         acc[key] = grouped[key];
         return acc;
       }, {});
-  }, [productsWithAvailableStock]);
+  }, [productsWithAvailableStock, visibleCount]);
+  const showMoreProducts = useCallback(() => setVisibleCount((n) => n + PRODUCTS_PER_PAGE), []);
 
-  const addToCart = (product) => {
+  // product.availableStock is its stock minus what is already in the cart (see productsWithAvailableStock)
+  const addToCart = useCallback((product) => {
     // Check stock availability
-    const cartItem = cart.find((item) => item.id === product.id);
-    const currentQuantity = cartItem ? cartItem.quantity : 0;
-    if (currentQuantity >= product.current_stock) {
+    if (!(product.availableStock > 0)) {
       toast.error(`Insufficient stock. Only ${product.current_stock} units available.`);
       return;
     }
@@ -137,9 +243,12 @@ function Sell() {
           i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prev, { ...product, quantity: 1, discount: 0, discountType: 'amount' }];
+      // the cart keeps the product, not the grid's on-screen stock figure
+      const item = { ...product };
+      delete item.availableStock;
+      return [...prev, { ...item, quantity: 1, discount: 0, discountType: 'amount' }];
     });
-  };
+  }, []);
 
   const updateQuantity = (id, val) => {
     const quantity = val === '' ? '' : Number(val);
@@ -319,7 +428,7 @@ function Sell() {
       // Auto-print invoice if enabled
       try {
         if (enablePrinting) {
-          const printerSettings = await api.getPrinterSettings();
+          const { printerSettings, shopInfo, receiptSettings: cachedReceipt } = await receiptSetup();
           // Direct USB printing does not use a Windows printer name
           if (printerSettings.name || printerSettings.useDirect) {
             // Fetch full invoice details for printing
@@ -330,8 +439,6 @@ function Sell() {
             let logoUrl = null;
             let receiptSettings = {};
             try {
-              // Shop name and logo path in one request (public endpoint)
-              const shopInfo = await api.getShopInfo();
               shopName = shopInfo?.name || 'Shop Operating Platform';
 
               // Get logo URL if printLogo is enabled
@@ -344,8 +451,8 @@ function Sell() {
                 }
               }
 
-              // Get receipt customization settings
-              receiptSettings = await api.getReceiptSettings();
+              // Receipt customization settings
+              receiptSettings = cachedReceipt || {};
             } catch (err) {
               // Use default
             }
@@ -394,13 +501,10 @@ function Sell() {
         setLastInvoiceNumber(res.invoice.invoice_number);
         setBalanceDialogOpen(true);
       }
-      // Refresh products to get updated stock
-      api
-        .listProducts(search)
-        .then((data) => setProducts(data))
-        .catch((err) => {
-          // Ignore errors, stock will update on next search
-        });
+      // Stock after the sale: the server returned the sold lines, so update locally (no catalogue download)
+      const sold = {};
+      for (const line of res.items || []) sold[line.product_id] = (sold[line.product_id] || 0) + line.quantity;
+      setProducts((prev) => prev.map((p) => (sold[p.id] ? { ...p, current_stock: p.current_stock - sold[p.id] } : p)));
     } catch (err) {
       toast.error(err.message || 'Failed to create invoice');
     } finally {
@@ -519,81 +623,13 @@ function Sell() {
             },
           }}
         >
-          {Object.keys(productsByCategory).length === 0 ? (
-            <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', mt: 4 }}>
-              No products found
-            </Typography>
-          ) : (
-            Object.entries(productsByCategory).map(([category, categoryProducts]) => (
-              <Box key={category} sx={{ mb: 3 }}>
-                <Typography
-                  variant="h6"
-                  sx={{
-                    mb: 2,
-                    pb: 1,
-                    borderBottom: '2px solid #e0e0e0',
-                    fontWeight: 600,
-                    color: 'primary.main',
-                  }}
-                >
-                  {category} ({categoryProducts.length})
-                </Typography>
-                <Grid container spacing={{ xs: 1, sm: 1.5, md: 2 }}>
-                  {categoryProducts.map((product) => (
-                    <Grid item xs={6} sm={4} md={4} lg={3} xl={2} key={product.id}>
-                      <Card
-                        sx={{
-                          height: '100%',
-                          cursor: product.availableStock > 0 ? 'pointer' : 'not-allowed',
-                          transition: 'all 0.2s',
-                          opacity: product.availableStock > 0 ? 1 : 0.6,
-                          '&:hover': {
-                            transform: product.availableStock > 0 ? 'translateY(-4px)' : 'none',
-                            boxShadow: product.availableStock > 0 ? 4 : 1,
-                          },
-                          border: product.availableStock <= product.minimum_stock ? '2px solid #f44336' : '1px solid #e0e0e0',
-                        }}
-                        onClick={() => {
-                          if (product.availableStock > 0) {
-                            addToCart(product);
-                          } else {
-                            toast.error(`Insufficient stock for ${product.name}`);
-                          }
-                        }}
-                      >
-                        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                          <Typography
-                            variant="body2"
-                            fontWeight="bold"
-                            noWrap
-                            sx={{ mb: 0.5 }}
-                          >
-                            {product.name}
-                          </Typography>
-                          <Typography variant="h6" color="primary" sx={{ mb: 0.5 }}>
-                            {formatCurrency(product.selling_price)}
-                          </Typography>
-                          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                            <Chip
-                              label={`Stock: ${product.availableStock}`}
-                              size="small"
-                              color={
-                                product.availableStock <= product.minimum_stock
-                                  ? 'error'
-                                  : product.availableStock === 0
-                                    ? 'default'
-                                    : 'default'
-                              }
-                            />
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  ))}
-                </Grid>
-              </Box>
-            ))
-          )}
+          <ProductGrid
+            productsByCategory={productsByCategory}
+            onAdd={addToCart}
+            shown={Math.min(visibleCount, productsWithAvailableStock.length)}
+            total={productsWithAvailableStock.length}
+            onShowMore={showMoreProducts}
+          />
         </Box>
       </Box>
 

@@ -27,14 +27,17 @@ function auditLowMargin(userId, productId, name, costPrice, sellingPrice, contex
   ).run(userId, productId, JSON.stringify({ product_name: name, cost_price: Number(costPrice) || 0, selling_price: Number(sellingPrice) || 0, context }));
 }
 
-// Get all active products (with optional search)
+// Get all active products (with optional search).
+// ?view=sell returns only what the Sell screen uses (about a third of the size of every column).
+const SELL_COLUMNS = 'p.id, p.name, p.category_id, p.unit, p.cost_price, p.selling_price, p.current_stock, p.minimum_stock, p.status';
 router.get('/', (req, res) => {
-  const { q } = req.query;
+  const { q, view } = req.query;
+  const columns = view === 'sell' ? SELL_COLUMNS : 'p.*';
   if (q) {
     const rows = db
       .prepare(
         `
-        SELECT p.*, c.name as category_name
+        SELECT ${columns}, c.name as category_name
         FROM products p
         LEFT JOIN categories c ON c.id = p.category_id
         WHERE p.status = 'ACTIVE'
@@ -48,7 +51,7 @@ router.get('/', (req, res) => {
   const rows = db
     .prepare(
       `
-      SELECT p.*, c.name as category_name
+      SELECT ${columns}, c.name as category_name
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE p.status = 'ACTIVE'
