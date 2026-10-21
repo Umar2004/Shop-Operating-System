@@ -496,7 +496,7 @@ function Customers() {
                               }
                             }}
                           >
-                            <DeleteIcon fontSize="small" />
+                            <Delete fontSize="small" />
                           </IconButton>
                         </TableCell>
                       </TableRow>
