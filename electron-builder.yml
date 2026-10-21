@@ -1,0 +1,67 @@
+appId: com.shopoperatingplatform.sos
+productName: Shop Operating Platform
+copyright: Copyright © 2025
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - electron/**/*
+  - frontend/dist/**/*
+  - package.json
+  - node_modules/**/*
+  - "!electron-builder.yml"
+  - "!frontend/node_modules/**/*"
+  - "!node_modules/electron/**/*"
+  - "!node_modules/electron-builder/**/*"
+  - "!node_modules/.bin/**/*"
+  - "!**/*.{md,yml,yaml}"
+  - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp}"
+  - "!**/._*"
+  - "!**/{.DS_Store,.git,.gitignore,.gitattributes}"
+  - "!**/{__pycache__,thumbs.db,.idea,.vs}"
+  - "!**/{npm-debug.log,yarn.lock,.yarn-integrity}"
+
+# Unpack native modules so they're accessible at runtime
+asarUnpack:
+  - "node_modules/usb/**/*"
+  - "node_modules/jimp/**/*"
+  - "frontend/dist/**/*"
+
+# Copy backend WITH its node_modules as plain files (not in asar)
+# so the Express server can require() its dependencies at runtime
+extraFiles:
+  - from: backend
+    to: backend
+    filter:
+      - "**/*"
+      - "!**/data/**/*"
+      - "!**/uploads/**/*"
+      - "!**/*.db"
+      - "!node_modules/**/{CHANGELOG.md,README.md,readme.md}"
+      - "!node_modules/**/{test,__tests__,tests,example,examples}"
+      - "!node_modules/**/*.d.ts"
+      - "!node_modules/.bin"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Shop Operating Platform
+  license: LICENSE.txt
+
+portable:
+  artifactName: ${productName}-${version}-portable-${arch}.${ext}

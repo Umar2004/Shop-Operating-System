@@ -1,0 +1,22 @@
+# Audit workspace: contains real customer data (live DB copies) and benchmark DBs
+_audit/
+
+# SQLite databases and their side files (never commit shop data)
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Dependencies and build output
+node_modules/
+dist/
+frontend/dist/
+
+# Uploaded files (shop logo etc.)
+backend/uploads/
+
+# Logs and env
+*.log
+.env

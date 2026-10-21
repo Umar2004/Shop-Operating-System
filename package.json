@@ -1,0 +1,38 @@
+{
+  "name": "sos",
+  "version": "1.0.0",
+  "description": "Shop Operating Platform - POS and Shop Management System",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:backend\" \"npm:dev:frontend\" \"npm:dev:electron\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:electron": "cross-env NODE_ENV=development electron .",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run build:frontend",
+    "rebuild:native": "npx electron-rebuild -f -w usb && cd backend && npm rebuild better-sqlite3 --build-from-source",
+    "build:win": "npm run build && npm run rebuild:native && electron-builder --win",
+    "build:portable": "npm run build && npm run rebuild:native && electron-builder --win portable",
+    "dist": "npm run build && npm run rebuild:native && electron-builder",
+    "start": "cross-env NODE_ENV=production electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "pos",
+    "shop",
+    "management"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^39.2.7",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "jimp": "^0.22.12",
+    "usb": "^2.17.0"
+  }
+}

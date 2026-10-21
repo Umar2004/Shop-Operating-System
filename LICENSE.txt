@@ -1,0 +1,7 @@
+Shop Operating Platform (SOP)
+Copyright © 2025
+
+This software is provided as-is for use in shop and point-of-sale operations.
+
+All rights reserved.
+

@@ -1,0 +1,13 @@
+const Database = require('./backend/node_modules/better-sqlite3');
+const path = require('path');
+const os = require('os');
+const dbPath = path.join(os.homedir(), 'AppData', 'Roaming', 'sos', 'data', 'sop.db');
+const db = new Database(dbPath);
+console.log('--- Table: products ---');
+console.log(db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='products'").get().sql);
+console.log('\n--- Triggers ---');
+console.log(JSON.stringify(db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger'").all(), null, 2));
+console.log('\n--- Products with current_stock != opening_stock ---');
+const products = db.prepare('SELECT id, name, opening_stock, current_stock FROM products WHERE current_stock != opening_stock LIMIT 10').all();
+console.log(JSON.stringify(products, null, 2));
+process.exit(0);
