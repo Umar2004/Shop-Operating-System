@@ -22,6 +22,8 @@ import {
   Tabs,
   Tab,
   Chip,
+  Alert,
+  Tooltip,
   Autocomplete,
   InputAdornment,
   useMediaQuery,
@@ -33,8 +35,37 @@ import { api } from '../api/client';
 import { useConfirmDialog } from '../utils/confirmDialog';
 import { getInputStep, getInputMin, formatNumber } from '../utils/numberFormat';
 import { generateReceiptHTML } from '../utils/print';
+import { saveInvoiceEdit } from '../utils/invoiceEdit';
+import { useAuthStore } from '../store/authStore';
+
+const ADJUST_LABELS = {
+  WRITE_OFF: {
+    title: 'Write off',
+    help: 'Forgive debt the customer will not pay. It is recorded with your name and the reason, and the balance goes down.',
+    done: 'Write-off recorded',
+  },
+  REFUND: {
+    title: 'Refund',
+    help: 'The customer paid more than they owe. Record the money handed back to them; a cash refund comes out of today\'s drawer.',
+    done: 'Refund recorded',
+  },
+  CHARGE: {
+    title: 'Charge',
+    help: 'Add a debt that is on no invoice (for example an amount agreed with the customer). It is recorded with your name and the reason.',
+    done: 'Charge recorded',
+  },
+};
+const ADJUST_TYPE_LABEL = { WRITE_OFF: 'Write-off', REFUND: 'Refund', CHARGE: 'Charge' };
 
 function Customers() {
+  const role = useAuthStore((s) => s.user?.role);
+  const canAdjust = role === 'ADMIN' || role === 'MANAGER';
+  const [customerAdjustments, setCustomerAdjustments] = useState([]);
+  const emptyAdjust = { open: false, type: 'WRITE_OFF', amount: '', reason: '', invoiceId: '', paymentType: 'CASH' };
+  const [adjustForm, setAdjustForm] = useState(emptyAdjust);
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const openAdjust = (type, amount = '') => setAdjustForm({ ...emptyAdjust, open: true, type, amount });
+  const closeAdjust = () => setAdjustForm(emptyAdjust);
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState('');
   const [openDialog, setOpenDialog] = useState(false);
@@ -50,12 +81,9 @@ function Customers() {
   const [openViewInvoiceDialog, setOpenViewInvoiceDialog] = useState(false);
   const [openEditInvoiceDialog, setOpenEditInvoiceDialog] = useState(false);
   const [openPaymentDialog, setOpenPaymentDialog] = useState(false);
-  const [openStatusDialog, setOpenStatusDialog] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [invoiceDetails, setInvoiceDetails] = useState(null);
-  const [selectedStatusInvoice, setSelectedStatusInvoice] = useState(null);
-  const [newStatus, setNewStatus] = useState('');
   const [editDiscount, setEditDiscount] = useState(0);
   const [editAdditionalAmount, setEditAdditionalAmount] = useState(0);
   const [editItems, setEditItems] = useState([]);
@@ -86,13 +114,15 @@ function Customers() {
 
   const loadCustomerData = async (customerId) => {
     try {
-      const [invoices, payments, allCustomers] = await Promise.all([
+      const [invoices, payments, adjustments, allCustomers] = await Promise.all([
         api.getCustomerInvoices(customerId),
         api.getCustomerPayments(customerId),
+        api.getCustomerAdjustments(customerId),
         api.listCustomers(''), // Refresh customer list to get updated balance
       ]);
       setCustomerInvoices(invoices);
       setCustomerPayments(payments);
+      setCustomerAdjustments(adjustments);
       // Update selected customer with fresh data only if it's the currently selected one
       const updatedCustomer = allCustomers.find((c) => c.id === customerId);
       if (updatedCustomer && selectedCustomer?.id === customerId) {
@@ -133,6 +163,7 @@ function Customers() {
       // Clear the previous customer's rows so they never show under this customer's name
       setCustomerInvoices([]);
       setCustomerPayments([]);
+      setCustomerAdjustments([]);
       setSelectedCustomer(c);
     }
     setDetailOpen(true);
@@ -143,6 +174,7 @@ function Customers() {
     setSelectedCustomer(null);
     setCustomerInvoices([]);
     setCustomerPayments([]);
+    setCustomerAdjustments([]);
   };
 
   return (
@@ -211,14 +243,18 @@ function Customers() {
                 <TableCell>{c.credit_limit.toFixed(2)}</TableCell>
                 <TableCell>{(c.opening_balance || 0).toFixed(2)}</TableCell>
                 <TableCell>
-                  <Chip
-                    label={Math.max(0, c.current_balance || 0).toFixed(2)}
-                    color={(c.current_balance || 0) > 0 ? 'error' : 'default'}
-                    size="small"
-                    sx={{
-                      fontWeight: (c.current_balance || 0) !== 0 ? 600 : 400,
-                    }}
-                  />
+                  {(c.refund_due || 0) > 0 ? (
+                    <Chip label={`Refund due ${c.refund_due.toFixed(2)}`} color="warning" size="small" sx={{ fontWeight: 600 }} />
+                  ) : (
+                    <Chip
+                      label={Math.max(0, c.current_balance || 0).toFixed(2)}
+                      color={(c.current_balance || 0) > 0 ? 'error' : 'default'}
+                      size="small"
+                      sx={{
+                        fontWeight: (c.current_balance || 0) !== 0 ? 600 : 400,
+                      }}
+                    />
+                  )}
                 </TableCell>
                 <TableCell align="right">
                   <IconButton
@@ -340,9 +376,30 @@ function Customers() {
                     />
                   </Box>
                 </Box>
-              <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)} sx={{ mb: 2 }}>
+                {(selectedCustomer.refund_due || 0) > 0 && (
+                  <Alert
+                    severity="warning"
+                    sx={{ mt: 1 }}
+                    action={
+                      canAdjust && (
+                        <Button color="inherit" size="small" onClick={() => openAdjust('REFUND', selectedCustomer.refund_due.toFixed(2))}>
+                          Record refund
+                        </Button>
+                      )
+                    }
+                  >
+                    This customer has paid {selectedCustomer.refund_due.toFixed(2)} more than they owe. Hand it back and record the refund.
+                  </Alert>
+                )}
+                {customerAdjustments.some((a) => a.provisional) && (
+                  <Alert severity="info" sx={{ mt: 1 }}>
+                    Part of this balance was carried over from the previous version of the app and is waiting for the owner&apos;s credit review.
+                  </Alert>
+                )}
+              <Tabs value={tabValue} onChange={(_, v) => setTabValue(v)} sx={{ mb: 2, mt: 1 }}>
                 <Tab label="Invoices" />
                 <Tab label="Payment History" />
+                <Tab label={`Adjustments${customerAdjustments.length ? ` (${customerAdjustments.length})` : ''}`} />
               </Tabs>
 
               {tabValue === 0 && (
@@ -364,6 +421,7 @@ function Customers() {
                           <TableCell>Total Amount</TableCell>
                           <TableCell>Discount</TableCell>
                           <TableCell>Paid</TableCell>
+                          <TableCell>Written off</TableCell>
                           <TableCell>Balance</TableCell>
                           <TableCell>Status</TableCell>
                           <TableCell align="right">Actions</TableCell>
@@ -379,28 +437,25 @@ function Customers() {
                             <TableCell>{inv.total_amount.toFixed(2)}</TableCell>
                             <TableCell>{inv.discount.toFixed(2)}</TableCell>
                             <TableCell>{(inv.paid_amount || 0).toFixed(2)}</TableCell>
+                            <TableCell>{(inv.written_off || 0) > 0 ? inv.written_off.toFixed(2) : '-'}</TableCell>
                             <TableCell sx={{ color: (inv.balance_amount || 0) > 0 ? 'error.main' : 'inherit', fontWeight: (inv.balance_amount || 0) > 0 ? 600 : 400 }}>
                               {(inv.balance_amount || 0).toFixed(2)}
                             </TableCell>
                             <TableCell>
-                              <Chip
-                                label={inv.payment_status}
-                                color={
-                                  inv.payment_status === 'PAID'
-                                    ? 'success'
-                                    : inv.payment_status === 'PARTIAL'
-                                      ? 'warning'
-                                      : 'error'
-                                }
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedStatusInvoice(inv);
-                                  setNewStatus(inv.payment_status);
-                                  setOpenStatusDialog(true);
-                                }}
-                                sx={{ cursor: 'pointer' }}
-                              />
+                              {/* Read-only: the status follows the payments and write-offs */}
+                              <Tooltip title="Follows the money received and any write-off. To change it, take a payment or write off the rest.">
+                                <Chip
+                                  label={inv.payment_status}
+                                  color={
+                                    inv.payment_status === 'PAID'
+                                      ? 'success'
+                                      : inv.payment_status === 'PARTIAL'
+                                        ? 'warning'
+                                        : 'error'
+                                  }
+                                  size="small"
+                                />
+                              </Tooltip>
                             </TableCell>
                             <TableCell align="right">
                               <IconButton
@@ -557,8 +612,72 @@ function Customers() {
                   )}
                 </Box>
               )}
+
+              {tabValue === 2 && (
+                <Box>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Write-offs, refunds and charges ({customerAdjustments.length})
+                  </Typography>
+                  {customerAdjustments.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      Nothing has been written off, refunded or charged for this customer.
+                    </Typography>
+                  ) : (
+                    <Box sx={{ overflowX: 'auto' }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Date</TableCell>
+                          <TableCell>Type</TableCell>
+                          <TableCell>Invoice #</TableCell>
+                          <TableCell>Amount</TableCell>
+                          <TableCell>Reason</TableCell>
+                          <TableCell>By</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {customerAdjustments.map((a) => (
+                          <TableRow key={a.id}>
+                            <TableCell>{new Date(`${a.created_at.replace(' ', 'T')}Z`).toLocaleString()}</TableCell>
+                            <TableCell>
+                              <Chip
+                                label={a.provisional ? `${ADJUST_TYPE_LABEL[a.type]} (carried over)` : ADJUST_TYPE_LABEL[a.type]}
+                                color={a.type === 'CHARGE' ? 'warning' : a.type === 'REFUND' ? 'info' : 'default'}
+                                variant={a.provisional ? 'outlined' : 'filled'}
+                                size="small"
+                              />
+                            </TableCell>
+                            <TableCell>{a.invoice_number || '-'}</TableCell>
+                            <TableCell>
+                              {a.amount.toFixed(2)}
+                              {a.type === 'REFUND' && a.payment_type ? ` (${a.payment_type})` : ''}
+                            </TableCell>
+                            <TableCell>{a.reason}</TableCell>
+                            <TableCell>{a.created_by_name || '-'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    </Box>
+                  )}
+                </Box>
+              )}
             </DialogContent>
             <DialogActions>
+              {canAdjust && (
+                <>
+                  <Button
+                    onClick={() => openAdjust('WRITE_OFF')}
+                    disabled={(selectedCustomer.current_balance || 0) <= 0}
+                  >
+                    Write off
+                  </Button>
+                  <Button onClick={() => openAdjust('CHARGE')} color="warning">
+                    Charge
+                  </Button>
+                  <Box sx={{ flexGrow: 1 }} />
+                </>
+              )}
               <Button onClick={closeCustomerDetail}>Close</Button>
             </DialogActions>
           </>
@@ -1294,8 +1413,9 @@ function Customers() {
                 toast.error('Please select a product for all items');
                 return;
               }
-              try {
-                await api.updateInvoice(invoiceDetails.invoice.id, {
+              await saveInvoiceEdit(
+                invoiceDetails.invoice.id,
+                {
                   items: editItems.map((item) => ({
                     productId: item.productId,
                     quantity: item.quantity,
@@ -1304,16 +1424,16 @@ function Customers() {
                   discount: editDiscount,
                   additionalAmount: editAdditionalAmount,
                   customerId: editCustomer?.id || null,
-                });
-                toast.success('Invoice updated successfully');
-                setOpenEditInvoiceDialog(false);
-                if (selectedCustomer) {
-                  loadCustomerData(selectedCustomer.id);
+                },
+                confirm,
+                () => {
+                  setOpenEditInvoiceDialog(false);
+                  if (selectedCustomer) {
+                    loadCustomerData(selectedCustomer.id);
+                  }
+                  load();
                 }
-                load();
-              } catch (err) {
-                toast.error(err.message);
-              }
+              );
             }}
           >
             Save
@@ -1321,67 +1441,100 @@ function Customers() {
         </DialogActions>
       </Dialog>
 
-      {/* Edit Status Dialog */}
-      <Dialog
-        open={openStatusDialog}
-        onClose={() => setOpenStatusDialog(false)}
-        fullWidth
-        maxWidth="sm"
-      >
+      {/* Write off / refund / charge: an explicit, audited change to what the customer owes */}
+      <Dialog open={adjustForm.open} onClose={closeAdjust} fullWidth maxWidth="sm">
         <DialogTitle>
-          Change Invoice Status - {selectedStatusInvoice?.invoice_number}
+          {ADJUST_LABELS[adjustForm.type]?.title} - {selectedCustomer?.name}
         </DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Typography variant="body2" color="text.secondary" gutterBottom>
-            Current Status: <strong>{selectedStatusInvoice?.payment_status}</strong>
+            {ADJUST_LABELS[adjustForm.type]?.help}
           </Typography>
-          <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
-            Total Amount: {selectedStatusInvoice?.total_amount?.toFixed(2)}
-          </Typography>
-          <FormControl fullWidth margin="normal">
-            <InputLabel>New Status</InputLabel>
-            <Select
-              label="New Status"
-              value={newStatus}
-              onChange={(e) => setNewStatus(e.target.value)}
-            >
-              <MenuItem value="CREDIT">CREDIT</MenuItem>
-              <MenuItem value="PARTIAL">PARTIAL</MenuItem>
-              <MenuItem value="PAID">PAID</MenuItem>
-            </Select>
-          </FormControl>
-          {newStatus !== selectedStatusInvoice?.payment_status && (
-            <Box sx={{ mt: 2, p: 2, bgcolor: '#fff3cd', borderRadius: 1 }}>
-              <Typography variant="body2" color="text.secondary">
-                <strong>Note:</strong> Changing the status will update the customer balance accordingly.
-              </Typography>
-            </Box>
+          {adjustForm.type === 'WRITE_OFF' && (
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Invoice</InputLabel>
+              <Select
+                label="Invoice"
+                value={adjustForm.invoiceId}
+                onChange={(e) => {
+                  const inv = customerInvoices.find((i) => i.id === e.target.value);
+                  setAdjustForm({
+                    ...adjustForm,
+                    invoiceId: e.target.value,
+                    amount: inv ? Number(inv.balance_amount || 0).toFixed(2) : adjustForm.amount,
+                  });
+                }}
+              >
+                <MenuItem value="">No particular invoice (part of the total balance)</MenuItem>
+                {customerInvoices
+                  .filter((inv) => (inv.balance_amount || 0) > 0)
+                  .map((inv) => (
+                    <MenuItem key={inv.id} value={inv.id}>
+                      {inv.invoice_number} - {(inv.balance_amount || 0).toFixed(2)} left
+                    </MenuItem>
+                  ))}
+              </Select>
+            </FormControl>
           )}
+          {adjustForm.type === 'REFUND' && (
+            <FormControl fullWidth margin="normal">
+              <InputLabel>Paid back by</InputLabel>
+              <Select
+                label="Paid back by"
+                value={adjustForm.paymentType}
+                onChange={(e) => setAdjustForm({ ...adjustForm, paymentType: e.target.value })}
+              >
+                <MenuItem value="CASH">Cash (from today's drawer)</MenuItem>
+                <MenuItem value="CARD">Card</MenuItem>
+              </Select>
+            </FormControl>
+          )}
+          <TextField
+            label="Amount"
+            type="number"
+            fullWidth
+            margin="normal"
+            value={adjustForm.amount}
+            onChange={(e) => setAdjustForm({ ...adjustForm, amount: e.target.value })}
+            inputProps={{ min: 0, step: 0.01 }}
+          />
+          <TextField
+            label="Reason (required)"
+            fullWidth
+            margin="normal"
+            multiline
+            minRows={2}
+            value={adjustForm.reason}
+            onChange={(e) => setAdjustForm({ ...adjustForm, reason: e.target.value })}
+          />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpenStatusDialog(false)}>Cancel</Button>
+          <Button onClick={closeAdjust}>Cancel</Button>
           <Button
             variant="contained"
+            color={adjustForm.type === 'CHARGE' ? 'warning' : 'primary'}
+            disabled={adjustSaving || !(Number(adjustForm.amount) > 0) || !adjustForm.reason.trim()}
             onClick={async () => {
-              if (newStatus === selectedStatusInvoice?.payment_status) {
-                setOpenStatusDialog(false);
-                return;
-              }
+              setAdjustSaving(true);
               try {
-                await api.updateInvoiceStatus(selectedStatusInvoice.id, newStatus);
-                toast.success('Invoice status updated successfully');
-                setOpenStatusDialog(false);
-                if (selectedCustomer) {
-                  loadCustomerData(selectedCustomer.id);
-                }
-                load();
+                await api.addCustomerAdjustment(selectedCustomer.id, {
+                  type: adjustForm.type,
+                  amount: Number(adjustForm.amount),
+                  reason: adjustForm.reason.trim(),
+                  invoiceId: adjustForm.invoiceId || null,
+                  paymentType: adjustForm.paymentType,
+                });
+                toast.success(ADJUST_LABELS[adjustForm.type].done);
+                closeAdjust();
+                loadCustomerData(selectedCustomer.id);
               } catch (err) {
                 toast.error(err.message);
+              } finally {
+                setAdjustSaving(false);
               }
             }}
-            disabled={newStatus === selectedStatusInvoice?.payment_status}
           >
-            Update Status
+            {ADJUST_LABELS[adjustForm.type]?.title}
           </Button>
         </DialogActions>
       </Dialog>

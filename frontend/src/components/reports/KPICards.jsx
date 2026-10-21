@@ -144,7 +144,11 @@ function KPICards({ summary, loading }) {
           title="Total Outstanding"
           value={summary.total_outstanding || 0}
           icon={MdTrendingDown}
-          subtitle="Unpaid balances"
+          subtitle={[
+            'Unpaid balances',
+            (summary.write_offs || 0) > 0 ? `written off in period ${formatNumber(summary.write_offs)}` : null,
+            (summary.customer_refund_due || 0) > 0 ? `refunds due ${formatNumber(summary.customer_refund_due)}` : null,
+          ].filter(Boolean).join(' · ')}
         />
       </Grid>
       <Grid item xs={12} sm={6} md={4} lg={2} xl={2}>

@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
+const { sessionMoney } = require('./balances');
 
 const router = express.Router();
 
@@ -126,18 +127,8 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   }
 
   // Calculate expected cash:
-  // opening_cash + cash payments - expenses + returns (simplified: no separate returns table, so assume returns handled as negative sales)
-  const cashSalesRow = db
-    .prepare(
-      `
-      SELECT COALESCE(SUM(p.amount), 0) as cash_sales
-      FROM payments p
-      JOIN invoices i ON i.id = p.invoice_id
-      WHERE p.payment_type = 'CASH'
-      AND i.session_id = ?
-    `
-    )
-    .get(session.id);
+  // opening_cash + cash taken today (sales and credit repayments) - expenses - cash refunds
+  const money = sessionMoney(session.id);
 
   const expensesRow = db
     .prepare(
@@ -151,8 +142,9 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
 
   const expectedCash =
     (session.opening_cash || 0) +
-    (cashSalesRow.cash_sales || 0) -
-    (expensesRow.expenses || 0);
+    (money.cash || 0) -
+    (expensesRow.expenses || 0) -
+    (money.cash_refunds || 0);
 
   const difference = (actualCash || 0) - expectedCash;
 

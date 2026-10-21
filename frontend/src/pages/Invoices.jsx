@@ -45,6 +45,7 @@ import { useConfirmDialog } from '../utils/confirmDialog';
 import { formatCurrency, formatDate } from '../utils/numberFormat';
 import { useAuthStore } from '../store/authStore';
 import { generateInvoiceHTML } from '../utils/print';
+import { saveInvoiceEdit } from '../utils/invoiceEdit';
 
 function Invoices() {
   const user = useAuthStore((s) => s.user);
@@ -948,8 +949,9 @@ function Invoices() {
                 toast.error('All items must have a product selected');
                 return;
               }
-              try {
-                await api.updateInvoice(invoiceDetails.invoice.id, {
+              await saveInvoiceEdit(
+                invoiceDetails.invoice.id,
+                {
                   items: editItems.map(i => ({
                     productId: i.productId,
                     quantity: i.quantity,
@@ -960,13 +962,13 @@ function Invoices() {
                   discount: editDiscount,
                   additionalAmount: editAdditionalAmount,
                   customerId: editCustomer?.id || null
-                });
-                toast.success('Invoice updated successfully');
-                setEditDialogOpen(false);
-                loadInvoices();
-              } catch (err) {
-                toast.error(err.message || 'Failed to update invoice');
-              }
+                },
+                confirm,
+                () => {
+                  setEditDialogOpen(false);
+                  loadInvoices();
+                }
+              );
             }}
           >
             Update Invoice

@@ -292,32 +292,86 @@ function runMigrations() {
     console.error('Failed to migrate payments table:', e);
   }
 
-  /* Audit and fix invoice statuses that might be incorrect due to CREDIT payments being counted as paid */
+  // The day (session) a payment was taken in, so a credit repayment counts in today's drawer
+  // rather than on the day of the invoice it pays off (older rows stay NULL; see balances.sessionMoney)
   try {
-    db.exec(`
-      UPDATE invoices
-      SET payment_status = CASE 
-        WHEN (
-          SELECT COALESCE(SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END), 0) 
-          FROM payments 
-          WHERE invoice_id = invoices.id
-        ) >= total_amount THEN 'PAID'
-        WHEN (
-          SELECT COALESCE(SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END), 0) 
-          FROM payments 
-          WHERE invoice_id = invoices.id
-        ) > 0 THEN 'PARTIAL'
-        ELSE 'CREDIT'
-      END
-      WHERE (
-        SELECT COALESCE(SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END), 0) 
-        FROM payments 
-        WHERE invoice_id = invoices.id
-      ) < total_amount AND payment_status = 'PAID'
-    `);
+    db.exec('ALTER TABLE payments ADD COLUMN session_id INTEGER');
   } catch (e) {
-    console.error('Failed to audit invoice statuses:', e);
+    // Ignore if column already exists
   }
+
+  /* Balance adjustments: explicit write-offs, charges and refunds (see balances.js) */
+  const hadAdjustments = !!db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'balance_adjustments'")
+    .get();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS balance_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      customer_id INTEGER,
+      invoice_id INTEGER,
+      type TEXT NOT NULL CHECK (type IN ('WRITE_OFF', 'CHARGE', 'REFUND')),
+      amount REAL NOT NULL CHECK (amount > 0),
+      reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+      payment_type TEXT,
+      session_id INTEGER,
+      provisional INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+      FOREIGN KEY (created_by) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_balance_adjustments_customer ON balance_adjustments(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_balance_adjustments_invoice ON balance_adjustments(invoice_id);
+  `);
+  if (!hadAdjustments) {
+    carryOverBalances();
+  }
+
+  /* Invoice statuses and customer balances always follow the money and the adjustments */
+  try {
+    const { refreshAll } = require('./balances');
+    const fixed = refreshAll();
+    if (fixed.statuses || fixed.balances) {
+      console.log(`Start-up check: corrected ${fixed.statuses} invoice status(es) and ${fixed.balances} balance(s)`);
+    }
+  } catch (e) {
+    console.error('Failed to check invoice statuses and balances:', e);
+  }
+}
+
+// Once, when upgrading from a version without adjustments: the old app lowered balances with no record
+// (forgiven debts set by changing the invoice status). Keep every balance exactly as the old app showed it
+// by recording the difference as PROVISIONAL adjustments, until the owner's credit review replaces them.
+function carryOverBalances() {
+  const { customerBalance, toCents } = require('./balances');
+  const author = db.prepare("SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'ADMIN' ORDER BY u.id LIMIT 1").get()
+    || db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get();
+  const customers = db.prepare('SELECT id, current_balance FROM customers').all();
+  if (!author || customers.length === 0) return;
+  const insert = db.prepare(
+    `INSERT INTO balance_adjustments (customer_id, type, amount, reason, provisional, created_by) VALUES (?, ?, ?, ?, 1, ?)`
+  );
+  let rows = 0;
+  db.transaction(() => {
+    for (const c of customers) {
+      const byRecords = toCents(customerBalance(c.id)); // the table is still empty here
+      const shown = toCents(c.current_balance);
+      if (byRecords > Math.max(0, shown)) {
+        insert.run(c.id, 'WRITE_OFF', (byRecords - Math.max(0, shown)) / 100,
+          'Carried over at upgrade: cleared in the old version without payment (pending credit review)', author.id);
+        rows += 1;
+      } else if (shown > 0 && byRecords < shown) {
+        insert.run(c.id, 'CHARGE', (shown - byRecords) / 100,
+          'Carried over at upgrade: owed in the old version but on no invoice (pending credit review)', author.id);
+        rows += 1;
+      }
+    }
+    db.prepare(
+      `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES (?, 'CREDIT_CARRY_OVER', 'CUSTOMER', NULL, ?)`
+    ).run(author.id, JSON.stringify({ provisional_adjustments: rows, customers: customers.length }));
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('credit.review_pending', 'true')").run();
+  })();
 }
 
 function seedDefaults() {

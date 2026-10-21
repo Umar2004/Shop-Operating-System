@@ -112,6 +112,14 @@ export const api = {
     request(`/customers/${customerId}/invoices`),
   getCustomerPayments: (customerId) =>
     request(`/customers/${customerId}/payments`),
+  getCustomerAdjustments: (customerId) =>
+    request(`/customers/${customerId}/adjustments`),
+  // payload: { type: 'WRITE_OFF' | 'REFUND' | 'CHARGE', amount, reason, invoiceId?, paymentType? }
+  addCustomerAdjustment: (customerId, payload) =>
+    request(`/customers/${customerId}/adjustments`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   payCustomerCredit: (customerId, amount, paymentType, invoiceId) =>
     request(`/customers/${customerId}/pay-credit`, {
       method: 'POST',

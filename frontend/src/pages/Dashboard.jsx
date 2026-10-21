@@ -440,6 +440,18 @@ function Dashboard() {
             {formatCurrency(summary?.payments?.credit_sales || 0)}
           </strong>
         </Typography>
+        {(summary?.payments?.cash_repayments || 0) > 0 && (
+          <Typography variant="body2">
+            🔁 Credit repaid (cash):{' '}
+            <strong>{formatCurrency(summary.payments.cash_repayments)}</strong>
+          </Typography>
+        )}
+        {(summary?.payments?.cash_refunds || 0) > 0 && (
+          <Typography variant="body2">
+            ↩️ Cash refunds:{' '}
+            <strong>{formatCurrency(summary.payments.cash_refunds)}</strong>
+          </Typography>
+        )}
       </Paper>
 
       {/* Quick actions */}

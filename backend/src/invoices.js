@@ -1,7 +1,24 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
-const { invoicePaid, statusFor, refreshInvoiceStatus, customerBalance, refreshCustomerBalance } = require('./balances');
+const {
+  invoicePaid,
+  invoiceWrittenOff,
+  statusFor,
+  refreshInvoiceStatus,
+  customerBalance,
+  refreshCustomerBalance,
+  recordAdjustment,
+} = require('./balances');
+
+// An error that carries its own HTTP status and machine-readable code back to the route's catch
+function httpError(status, code, message, extra = {}) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.extra = extra;
+  return err;
+}
 
 const router = express.Router();
 
@@ -309,13 +326,13 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       const insertPayment = db.prepare(
         `
         INSERT INTO payments
-        (invoice_id, payment_type, amount, note)
-        VALUES (?, ?, ?, ?)
+        (invoice_id, payment_type, amount, note, session_id)
+        VALUES (?, ?, ?, ?, ?)
       `
       );
       storedPayments.forEach((p) => {
         if (p.amount > 0) {
-          insertPayment.run(invoiceId, p.type, p.amount / 100, p.note);
+          insertPayment.run(invoiceId, p.type, p.amount / 100, p.note, session.id);
         }
       });
     }
@@ -565,11 +582,16 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) =
       db.prepare('DELETE FROM payments WHERE id = ?').run(payment.id);
     });
 
+    // Write-offs on this invoice go with it (ON DELETE CASCADE); keep what they were in the audit row
+    const adjustments = db.prepare('SELECT id, type, amount, reason FROM balance_adjustments WHERE invoice_id = ?').all(id);
+
     writeAudit(req.user.id, 'INVOICE_DELETED', id, {
       invoice_number: invoice.invoice_number,
       total: invoice.total_amount,
       payment_status: invoice.payment_status,
       customer_id: invoice.customer_id,
+      payments: payments.map((p) => ({ payment_type: p.payment_type, amount: p.amount })),
+      adjustments,
       items: items.map((i) => ({ product_id: i.product_id, product_name: i.product_name, quantity: i.quantity, unit_price: i.unit_price })),
     });
 
@@ -603,7 +625,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     .get(id);
   const hasPayments = payments.count > 0;
 
-  const { items, discount = 0, additionalAmount = 0, customerId } = req.body;
+  const { items, discount = 0, additionalAmount = 0, customerId, refundExcess = false, refundMethod = 'CASH' } = req.body;
 
   // The edit replaces every line, so the full item list is required
   // (without it the old lines would be deleted and their stock restored with nothing put back)
@@ -713,10 +735,54 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const newCustomerId = customerId !== undefined ? (customerId || null) : invoice.customer_id;
     const balanceBefore = newCustomerId ? customerBalance(newCustomerId) : 0;
 
+    // Money already taken and debt already forgiven must still fit the edited invoice
+    const paidCents = toCents(invoicePaid(id));
+    const writtenOffCents = toCents(invoiceWrittenOff(id));
+    if (writtenOffCents > 0 && newCustomerId !== invoice.customer_id) {
+      throw httpError(409, 'HAS_WRITE_OFF', 'Part of this invoice was written off, so it cannot be moved to another customer');
+    }
+    if (writtenOffCents > 0 && toCents(finalTotal) < paidCents + writtenOffCents) {
+      throw httpError(409, 'WRITE_OFF_EXCEEDS_TOTAL',
+        `The new total (${finalTotal.toFixed(2)}) is less than what was paid and written off (${((paidCents + writtenOffCents) / 100).toFixed(2)})`);
+    }
+
     // Update invoice
     db.prepare(
       'UPDATE invoices SET customer_id = ?, discount = ?, additional_amount = ?, total_amount = ?, total_cost = ? WHERE id = ?'
     ).run(newCustomerId, discount, Number(additionalAmount) || 0, finalTotal, totalCost, id);
+
+    // Overpayment created by the edit is handed back, never kept as credit. For a named customer the extra money
+    // first counts against their other debts; only what would leave the shop owing them is refunded.
+    let refundCents = 0;
+    if (toCents(finalTotal) < paidCents) {
+      refundCents = newCustomerId
+        ? Math.min(paidCents - toCents(finalTotal), Math.max(0, -toCents(customerBalance(newCustomerId))))
+        : paidCents - toCents(finalTotal);
+    }
+    if (refundCents > 0) {
+      if (!refundExcess) {
+        throw httpError(409, 'REFUND_REQUIRED',
+          `The customer has paid ${(paidCents / 100).toFixed(2)} but the new total is ${finalTotal.toFixed(2)}: ${(refundCents / 100).toFixed(2)} must be refunded`,
+          { refund: refundCents / 100 });
+      }
+      if (!['CASH', 'CARD'].includes(refundMethod)) {
+        throw httpError(400, 'BAD_REFUND_METHOD', 'Refund method must be CASH or CARD');
+      }
+      const session = db.prepare("SELECT id FROM sessions WHERE status = 'OPEN' ORDER BY id DESC LIMIT 1").get();
+      if (refundMethod === 'CASH' && !session) {
+        throw httpError(400, 'NO_OPEN_DAY', 'Open the day first: a cash refund is taken from the drawer');
+      }
+      recordAdjustment({
+        customerId: newCustomerId,
+        invoiceId: newCustomerId ? null : id,
+        type: 'REFUND',
+        amount: refundCents / 100,
+        reason: `Refund after editing ${invoice.invoice_number} (total ${invoice.total_amount.toFixed(2)} -> ${finalTotal.toFixed(2)})`,
+        paymentType: refundMethod,
+        sessionId: refundMethod === 'CASH' ? session.id : null,
+        userId: req.user.id,
+      });
+    }
 
     // Status and balances follow the money; an edit may not push the customer over their credit limit
     refreshInvoiceStatus(id);
@@ -771,7 +837,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const result = tx();
     res.json(result);
   } catch (err) {
-    res.status(400).json({ message: err.message });
+    res.status(err.status || 400).json({ message: err.message, ...(err.code ? { code: err.code, ...err.extra } : {}) });
   }
 });
 
@@ -816,13 +882,14 @@ router.patch('/:id/status', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   }
 
   // The status is derived from the money received. Changing it by hand used to move the customer's
-  // balance with no money involved; now it can only be set to what the payments say.
+  // balance with no money involved; now it can only be set to what the payments (and write-offs) say.
   const paid = invoicePaid(id);
-  const derived = statusFor(invoice.total_amount, paid);
+  const writtenOff = invoiceWrittenOff(id);
+  const derived = statusFor(invoice.total_amount, paid, writtenOff);
   if (paymentStatus !== derived) {
     return res.status(409).json({
       code: 'STATUS_FOLLOWS_PAYMENTS',
-      message: `Status follows payments: ${paid.toFixed(2)} of ${invoice.total_amount.toFixed(2)} has been paid, so this invoice is ${derived}. Record a payment to change it.`,
+      message: `Status follows payments: ${paid.toFixed(2)} of ${invoice.total_amount.toFixed(2)} has been paid${writtenOff > 0 ? ` and ${writtenOff.toFixed(2)} written off` : ''}, so this invoice is ${derived}. Record a payment, or use "Write off" on the customer to forgive the rest.`,
     });
   }
 

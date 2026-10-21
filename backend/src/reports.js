@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
+const { sessionMoney } = require('./balances');
 
 const router = express.Router();
 
@@ -59,19 +60,16 @@ router.get('/day-summary', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, r
     )
     .get(session.id);
 
-  const paymentBreakdown = db
-    .prepare(
-      `
-      SELECT
-        COALESCE(SUM(CASE WHEN p.payment_type = 'CASH' THEN p.amount END), 0) as cash_sales,
-        COALESCE(SUM(CASE WHEN p.payment_type = 'CARD' THEN p.amount END), 0) as card_sales,
-        COALESCE(SUM(CASE WHEN p.payment_type = 'CREDIT' THEN p.amount END), 0) as credit_sales
-      FROM payments p
-      JOIN invoices i ON i.id = p.invoice_id
-      WHERE i.session_id = ?
-    `
-    )
-    .get(session.id);
+  // Money taken in this day (sales and credit repayments) and refunds handed back (see balances.sessionMoney)
+  const money = sessionMoney(session.id);
+  const paymentBreakdown = {
+    cash_sales: money.cash - money.cash_repayments,
+    card_sales: money.card,
+    credit_sales: money.credit,
+    cash_repayments: money.cash_repayments,
+    cash_refunds: money.cash_refunds,
+    refunds: money.all_refunds,
+  };
 
   // Get total products count (active products only)
   const productsCount = db
@@ -94,8 +92,9 @@ router.get('/day-summary', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, r
 
   const expectedCash =
     (session.opening_cash || 0) +
-    (paymentBreakdown.cash_sales || 0) -
-    (expensesRow.total_expenses || 0);
+    (money.cash || 0) -
+    (expensesRow.total_expenses || 0) -
+    (money.cash_refunds || 0);
 
   res.json({
     session,
@@ -278,17 +277,32 @@ router.get('/sales/summary', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
     : 0;
 
   // Get total outstanding amount from customers
-  // current_balance is derived from invoices and payments (balances.js). Only positive balances are owed to
-  // the shop; customers who have overpaid hold credit, which is reported separately instead of netting it off
+  // current_balance is derived from invoices, payments and adjustments (balances.js). Only positive balances are
+  // owed to the shop; customers who have overpaid are owed a refund, reported separately instead of netting it off
   const outstanding = db
-    .prepare('SELECT SUM(MAX(0, current_balance)) as total, -SUM(MIN(0, current_balance)) as credit_held FROM customers')
+    .prepare('SELECT SUM(MAX(0, current_balance)) as total, -SUM(MIN(0, current_balance)) as refund_due FROM customers')
     .get();
+  // Debt forgiven and money refunded in the period: shown on their own, never mixed into sales or payments
+  // (provisional carry-over rows from the upgrade are not a decision taken in the period)
+  const adjustmentsInPeriod = db
+    .prepare(
+      `
+      SELECT
+        COALESCE(SUM(CASE WHEN type = 'WRITE_OFF' THEN amount END), 0) as write_offs,
+        COALESCE(SUM(CASE WHEN type = 'REFUND' THEN amount END), 0) as refunds,
+        COALESCE(SUM(CASE WHEN type = 'CHARGE' THEN amount END), 0) as charges
+      FROM balance_adjustments
+      WHERE provisional = 0 AND date(created_at, 'localtime') >= ? AND date(created_at, 'localtime') <= ?
+    `
+    )
+    .get(startDate, endDate);
 
   res.json({
     ...summary,
     profit_margin: parseFloat(profitMargin),
     total_outstanding: outstanding.total || 0,
-    customer_credit_held: outstanding.credit_held || 0,
+    customer_refund_due: outstanding.refund_due || 0,
+    ...adjustmentsInPeriod,
   });
 });
 

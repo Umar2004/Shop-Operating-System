@@ -1,7 +1,16 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
-const { toCents, invoicePaid, refreshInvoiceStatus, customerBalance, pastCreditLeft, refreshCustomerBalance } = require('./balances');
+const {
+  toCents,
+  ADJUSTMENT_TYPES,
+  invoiceRemaining,
+  refreshInvoiceStatus,
+  customerBalance,
+  pastCreditLeft,
+  refreshCustomerBalance,
+  recordAdjustment,
+} = require('./balances');
 
 
 const router = express.Router();
@@ -15,8 +24,9 @@ router.get('/', (req, res) => {
         .prepare(
           `
           SELECT 
-            id, name, phone, address, credit_limit, opening_balance, 
-            MAX(0, COALESCE(current_balance, 0)) as current_balance, 
+            id, name, phone, address, credit_limit, opening_balance,
+            MAX(0, COALESCE(current_balance, 0)) as current_balance,
+            MAX(0, -COALESCE(current_balance, 0)) as refund_due,
             is_active
           FROM customers
           WHERE name LIKE ? OR phone LIKE ?
@@ -30,8 +40,9 @@ router.get('/', (req, res) => {
       .prepare(
         `
         SELECT 
-          id, name, phone, address, credit_limit, opening_balance, 
-          MAX(0, COALESCE(current_balance, 0)) as current_balance, 
+          id, name, phone, address, credit_limit, opening_balance,
+          MAX(0, COALESCE(current_balance, 0)) as current_balance,
+          MAX(0, -COALESCE(current_balance, 0)) as refund_due,
           is_active
         FROM customers
         ORDER BY name
@@ -51,6 +62,9 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const { name, phone, address, creditLimit = 0, openingBalance = 0 } = req.body;
     if (!name) {
       return res.status(400).json({ message: 'Name is required' });
+    }
+    if (!Number.isFinite(Number(openingBalance)) || Number(openingBalance) < 0) {
+      return res.status(400).json({ message: 'Opening balance must be zero or more' });
     }
 
     const result = db
@@ -89,6 +103,19 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
       openingBalance = existing.opening_balance || 0,
       isActive = !!existing.is_active,
     } = req.body;
+
+    if (!Number.isFinite(Number(openingBalance)) || Number(openingBalance) < 0) {
+      return res.status(400).json({ message: 'Opening balance must be zero or more' });
+    }
+    // Lowering the opening balance below what has already been paid would leave the shop owing the customer
+    // money nobody handed back; overpayments are refunded, never held as credit
+    const balanceAfterEdit = customerBalance(id) + (toCents(openingBalance) - toCents(existing.opening_balance)) / 100;
+    if (toCents(balanceAfterEdit) < 0 && toCents(openingBalance) < toCents(existing.opening_balance)) {
+      return res.status(400).json({
+        code: 'OPENING_BELOW_PAID',
+        message: `The customer has already paid more than this opening balance leaves them owing (they would be owed ${(-balanceAfterEdit).toFixed(2)}). Record a refund instead.`,
+      });
+    }
 
     // Transaction to ensure atomicity
     const tx = db.transaction(() => {
@@ -140,7 +167,10 @@ router.get('/:id/invoices', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
           i.*, 
           s.business_date,
           COALESCE((SELECT SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END) FROM payments WHERE invoice_id = i.id), 0) as paid_amount,
-          (i.total_amount - COALESCE((SELECT SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END) FROM payments WHERE invoice_id = i.id), 0)) as balance_amount
+          COALESCE((SELECT SUM(amount) FROM balance_adjustments WHERE invoice_id = i.id AND type = 'WRITE_OFF'), 0) as written_off,
+          MAX(0, i.total_amount
+            - COALESCE((SELECT SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END) FROM payments WHERE invoice_id = i.id), 0)
+            - COALESCE((SELECT SUM(amount) FROM balance_adjustments WHERE invoice_id = i.id AND type = 'WRITE_OFF'), 0)) as balance_amount
         FROM invoices i
         LEFT JOIN sessions s ON s.id = i.session_id
         WHERE i.customer_id = ?
@@ -177,6 +207,111 @@ router.get('/:id/payments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
   }
 });
 
+// Balance adjustments: write-offs, charges and refunds (newest first)
+router.get('/:id/adjustments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const rows = db
+      .prepare(
+        `
+        SELECT a.*, u.username AS created_by_name, i.invoice_number
+        FROM balance_adjustments a
+        LEFT JOIN users u ON u.id = a.created_by
+        LEFT JOIN invoices i ON i.id = a.invoice_id
+        WHERE a.customer_id = ?
+        ORDER BY a.id DESC
+      `
+      )
+      .all(id);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching adjustments:', err);
+    res.status(500).json({ message: 'Failed to fetch adjustments' });
+  }
+});
+
+// Record a write-off (forgiven debt), a charge (debt on no invoice) or a refund (overpayment handed back)
+router.post('/:id/adjustments', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+  const customerId = Number(req.params.id);
+  const { type, amount, reason, invoiceId = null, paymentType = 'CASH' } = req.body || {};
+
+  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
+  if (!customer) {
+    return res.status(404).json({ message: 'Customer not found' });
+  }
+  if (!ADJUSTMENT_TYPES.includes(type)) {
+    return res.status(400).json({ message: 'Type must be WRITE_OFF, CHARGE or REFUND' });
+  }
+  const cents = toCents(amount);
+  if (!Number.isFinite(Number(amount)) || cents <= 0 || Math.abs(Number(amount) * 100 - cents) > 1e-6) {
+    return res.status(400).json({ message: 'Amount must be more than zero, with at most 2 decimals' });
+  }
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return res.status(400).json({ message: 'A reason is required' });
+  }
+
+  const owed = customerBalance(customerId);
+  let sessionId = null;
+  let refundPaymentType = null;
+  if (type === 'WRITE_OFF') {
+    if (invoiceId) {
+      const invoice = db.prepare('SELECT id, customer_id, invoice_number FROM invoices WHERE id = ?').get(invoiceId);
+      if (!invoice || invoice.customer_id !== customerId) {
+        return res.status(400).json({ message: 'Invalid invoice' });
+      }
+      const remaining = invoiceRemaining(invoice.id);
+      if (cents > toCents(remaining)) {
+        return res.status(400).json({ message: `Write-off (${(cents / 100).toFixed(2)}) is more than what is left on ${invoice.invoice_number} (${remaining.toFixed(2)})` });
+      }
+    }
+    if (cents > toCents(owed)) {
+      return res.status(400).json({ message: `Write-off (${(cents / 100).toFixed(2)}) is more than the customer owes (${Math.max(0, owed).toFixed(2)})` });
+    }
+  } else if (type === 'REFUND') {
+    if (invoiceId) {
+      return res.status(400).json({ message: 'A refund is for the customer, not for one invoice' });
+    }
+    const due = Math.max(0, -owed);
+    if (cents > toCents(due)) {
+      return res.status(400).json({ message: `Refund (${(cents / 100).toFixed(2)}) is more than the shop owes this customer (${due.toFixed(2)})` });
+    }
+    if (!['CASH', 'CARD'].includes(paymentType)) {
+      return res.status(400).json({ message: 'Refund method must be CASH or CARD' });
+    }
+    refundPaymentType = paymentType;
+    if (paymentType === 'CASH') {
+      // Cash leaves the drawer, so it belongs to the open day
+      const session = db.prepare("SELECT id FROM sessions WHERE status = 'OPEN' ORDER BY id DESC LIMIT 1").get();
+      if (!session) {
+        return res.status(400).json({ message: 'Open the day first: a cash refund is taken from the drawer' });
+      }
+      sessionId = session.id;
+    }
+  } else if (invoiceId) {
+    return res.status(400).json({ message: 'A charge is for the customer, not for one invoice' });
+  }
+
+  try {
+    const adjustment = db.transaction(() =>
+      recordAdjustment({
+        customerId,
+        invoiceId: type === 'WRITE_OFF' ? invoiceId : null,
+        type,
+        amount: cents / 100,
+        reason,
+        paymentType: refundPaymentType,
+        sessionId,
+        userId: req.user.id,
+      })
+    )();
+    const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
+    res.status(201).json({ adjustment, customer: updated });
+  } catch (err) {
+    console.error('Error recording adjustment:', err);
+    res.status(400).json({ message: err.message });
+  }
+});
+
 // Record credit payment
 router.post('/:id/pay-credit', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const customerId = Number(req.params.id);
@@ -199,21 +334,21 @@ router.post('/:id/pay-credit', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (re
     });
   }
 
+  // The money goes into today's drawer, whichever day the invoice it pays off was raised
+  const openSession = db.prepare("SELECT id FROM sessions WHERE status = 'OPEN' ORDER BY id DESC LIMIT 1").get();
+
   const tx = db.transaction(() => {
     // Work in cents so the allocation adds up exactly
     let remainingCents = toCents(amount);
-    const invoiceOwedCents = (invId) => {
-      const inv = db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(invId);
-      return Math.max(0, toCents(inv.total_amount) - toCents(invoicePaid(invId)));
-    };
+    const invoiceOwedCents = (invId) => toCents(invoiceRemaining(invId));
     const pay = (invId, cents, note) => {
       if (cents <= 0) return;
       db.prepare(
         `
-        INSERT INTO payments (customer_id, invoice_id, payment_type, amount, note)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO payments (customer_id, invoice_id, payment_type, amount, note, session_id)
+        VALUES (?, ?, ?, ?, ?, ?)
       `
-      ).run(customerId, invId, paymentType, cents / 100, note);
+      ).run(customerId, invId, paymentType, cents / 100, note, openSession ? openSession.id : null);
       if (invId) refreshInvoiceStatus(invId);
       remainingCents -= cents;
     };
