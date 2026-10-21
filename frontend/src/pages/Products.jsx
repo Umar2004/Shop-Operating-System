@@ -445,6 +445,14 @@ function Products() {
                 Total: {bulkPreview.summary.totalRows} rows |{' '}
                 <span style={{ color: '#4caf50' }}>Valid: {bulkPreview.summary.valid}</span> |{' '}
                 <span style={{ color: '#f44336' }}>Errors: {bulkPreview.summary.errors}</span>
+                {bulkPreview.summary.needsConfirmation > 0 && (
+                  <>
+                    {' '}|{' '}
+                    <span style={{ color: '#ed6c02' }}>
+                      Price not above cost (needs confirmation): {bulkPreview.summary.needsConfirmation}
+                    </span>
+                  </>
+                )}
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 1 }}>
@@ -476,65 +484,80 @@ function Products() {
                   bulkUploading ||
                   (bulkJobId !== null && bulkProgress?.status === 'processing')
                 }
-                onClick={async () => {
+                onClick={() => {
                   if (!bulkFile) {
                     toast.error('No file to import. Please upload again.');
                     return;
                   }
-                  const formData = new FormData();
-                  formData.append('file', bulkFile);
-                  formData.append('autoCreateCategories', String(autoCreateCategories));
-                  try {
-                    setBulkUploading(true);
-                    const res = await api.bulkUploadImport(formData);
-                    setBulkJobId(res.jobId);
+                  const runImport = async (confirmLowMargin) => {
+                    const formData = new FormData();
+                    formData.append('file', bulkFile);
+                    formData.append('autoCreateCategories', String(autoCreateCategories));
+                    formData.append('confirmLowMargin', String(confirmLowMargin));
+                    try {
+                      setBulkUploading(true);
+                      const res = await api.bulkUploadImport(formData);
+                      setBulkJobId(res.jobId);
 
-                    // Start polling for progress
-                    const pollProgress = async () => {
-                      try {
-                        const progress = await api.getBulkUploadProgress(res.jobId);
-                        setBulkProgress(progress);
-                        if (progress.status === 'completed' || progress.status === 'failed') {
-                          if (progressIntervalRef.current) {
-                            clearInterval(progressIntervalRef.current);
-                            progressIntervalRef.current = null;
-                          }
-                          setBulkUploading(false);
-                          if (progress.status === 'completed') {
-                            if (progress.failed > 0) {
-                              toast.warning(`Import complete: ${progress.inserted} imported, ${progress.failed} failed`);
+                      // Start polling for progress
+                      const pollProgress = async () => {
+                        try {
+                          const progress = await api.getBulkUploadProgress(res.jobId);
+                          setBulkProgress(progress);
+                          if (progress.status === 'completed' || progress.status === 'failed') {
+                            if (progressIntervalRef.current) {
+                              clearInterval(progressIntervalRef.current);
+                              progressIntervalRef.current = null;
+                            }
+                            setBulkUploading(false);
+                            if (progress.status === 'completed') {
+                              if (progress.failed > 0) {
+                                toast.warning(`Import complete: ${progress.inserted} imported, ${progress.failed} failed`);
+                              } else {
+                                toast.success(`Import complete: ${progress.inserted} products imported successfully`);
+                              }
+                              // Keep preview if there are errors to show
+                              if (progress.failed === 0) {
+                                setBulkPreview(null);
+                                setBulkFile(null);
+                              }
+                              setBulkJobId(null);
+                              setTimeout(() => {
+                                setBulkProgress(null);
+                              }, 10000); // Keep longer if there are errors
+                              load();
+                              api
+                                .getProductAlerts()
+                                .then((data) => setAlerts(data))
+                                .catch(() => { });
                             } else {
-                              toast.success(`Import complete: ${progress.inserted} products imported successfully`);
+                              toast.error(`Import failed: ${progress.error || 'Unknown error'}`);
                             }
-                            // Keep preview if there are errors to show
-                            if (progress.failed === 0) {
-                              setBulkPreview(null);
-                              setBulkFile(null);
-                            }
-                            setBulkJobId(null);
-                            setTimeout(() => {
-                              setBulkProgress(null);
-                            }, 10000); // Keep longer if there are errors
-                            load();
-                            api
-                              .getProductAlerts()
-                              .then((data) => setAlerts(data))
-                              .catch(() => { });
-                          } else {
-                            toast.error(`Import failed: ${progress.error || 'Unknown error'}`);
                           }
+                        } catch (err) {
                         }
-                      } catch (err) {
-                      }
-                    };
+                      };
 
-                    // Poll every 500ms
-                    progressIntervalRef.current = setInterval(pollProgress, 500);
-                    pollProgress(); // Initial poll
-                  } catch (err) {
-                    toast.error(err.message);
-                    setBulkUploading(false);
+                      // Poll every 500ms
+                      progressIntervalRef.current = setInterval(pollProgress, 500);
+                      pollProgress(); // Initial poll
+                    } catch (err) {
+                      toast.error(err.message);
+                      setBulkUploading(false);
+                    }
+                  };
+
+                  // Rows priced at or below cost are imported only after an explicit confirmation
+                  const lowMarginRows = bulkPreview.rows.filter((r) => r.needsConfirmation).map((r) => r.index);
+                  if (lowMarginRows.length > 0) {
+                    confirm(
+                      `${lowMarginRows.length} row(s) have a selling price that is not greater than the cost price ` +
+                        `(rows ${lowMarginRows.join(', ')}). They would sell at no profit or at a loss. Import them anyway?`,
+                      () => runImport(true)
+                    );
+                    return;
                   }
+                  runImport(false);
                 }}
               >
                 {bulkJobId && bulkProgress?.status === 'processing' ? 'Importing...' : 'Confirm Import'}
@@ -563,12 +586,15 @@ function Products() {
               <TableBody>
                 {bulkPreview.rows.map((row) => {
                   const isValid = row.status === 'valid';
+                  // Amber: importable, but only after confirming a price not above cost
+                  const bg = !isValid ? '#FFEBEE' : row.needsConfirmation ? '#FFF3E0' : '#E8F5E9';
+                  const hover = !isValid ? '#FFCDD2' : row.needsConfirmation ? '#FFE0B2' : '#C8E6C9';
                   return (
                     <TableRow
                       key={row.index}
                       sx={{
-                        bgcolor: isValid ? '#E8F5E9' : '#FFEBEE',
-                        '&:hover': { bgcolor: isValid ? '#C8E6C9' : '#FFCDD2' },
+                        bgcolor: bg,
+                        '&:hover': { bgcolor: hover },
                       }}
                     >
                       <TableCell>{row.index}</TableCell>
@@ -876,6 +902,13 @@ function Products() {
             onChange={(e) =>
               setForm({ ...form, sellingPrice: Number(e.target.value) || 0 })
             }
+            // Warn early; saving at or below cost also asks for confirmation
+            error={Math.round(Number(form.sellingPrice) * 100) <= Math.round(Number(form.costPrice) * 100)}
+            helperText={
+              Math.round(Number(form.sellingPrice) * 100) <= Math.round(Number(form.costPrice) * 100)
+                ? 'Selling price is not greater than cost price'
+                : undefined
+            }
             inputProps={{ min: 0, step: getInputStep() }}
           />
           <TextField
@@ -991,38 +1024,48 @@ function Products() {
           </Button>
           <Button
             variant="contained"
-            onClick={async () => {
-              try {
-                if (editingProduct) {
-                  // Update existing product
-                  await api.updateProduct(editingProduct.id, {
-                    name: form.name,
-                    categoryName: form.categoryName,
-                    unit: form.unit,
-                    costPrice: form.costPrice,
-                    sellingPrice: form.sellingPrice,
-                    minimumStock: form.minimumStock,
-                    status: form.status,
-                    mfd: form.mfd || null,
-                    exp: form.exp || null,
-                  });
-                  setOpenDialog(false);
-                  setEditingProduct(null);
-                  toast.success('Product updated');
-                } else {
-                  // Create new product
-                  await api.createProduct(form);
-                  setOpenDialog(false);
-                  toast.success('Product created');
+            onClick={() => {
+              // confirmLowMargin is sent only after the user confirms a price not above cost;
+              // the server enforces the same rule and answers 409 PRICE_NOT_ABOVE_COST otherwise
+              const saveProduct = async (confirmLowMargin) => {
+                try {
+                  if (editingProduct) {
+                    // Update existing product
+                    await api.updateProduct(editingProduct.id, {
+                      name: form.name,
+                      categoryName: form.categoryName,
+                      unit: form.unit,
+                      costPrice: form.costPrice,
+                      sellingPrice: form.sellingPrice,
+                      minimumStock: form.minimumStock,
+                      status: form.status,
+                      mfd: form.mfd || null,
+                      exp: form.exp || null,
+                      confirmLowMargin,
+                    });
+                    setOpenDialog(false);
+                    setEditingProduct(null);
+                    toast.success('Product updated');
+                  } else {
+                    // Create new product
+                    await api.createProduct({ ...form, confirmLowMargin });
+                    setOpenDialog(false);
+                    toast.success('Product created');
+                  }
+                  load();
+                  api
+                    .getProductAlerts()
+                    .then((data) => setAlerts(data))
+                    .catch(() => { });
+                } catch (err) {
+                  if (err.data?.code === 'PRICE_NOT_ABOVE_COST' && !confirmLowMargin) {
+                    confirm(`${err.message} Save anyway?`, () => saveProduct(true));
+                    return;
+                  }
+                  toast.error(err.message);
                 }
-                load();
-                api
-                  .getProductAlerts()
-                  .then((data) => setAlerts(data))
-                  .catch(() => { });
-              } catch (err) {
-                toast.error(err.message);
-              }
+              };
+              saveProduct(false);
             }}
           >
             {editingProduct ? 'Update' : 'Save'}

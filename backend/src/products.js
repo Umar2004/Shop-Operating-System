@@ -7,6 +7,25 @@ const { requireRole } = require('./auth');
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Selling at or below cost is allowed, but only after an explicit confirmation, which is then audit-logged.
+// (A cost entered per roll against a per-unit price once made months of sales look like a loss.)
+const toCents = (value) => Math.round((Number(value) || 0) * 100);
+const priceNotAboveCost = (costPrice, sellingPrice) => toCents(sellingPrice) <= toCents(costPrice);
+const isConfirmed = (value) => value === true || value === 'true';
+
+function lowMarginResponse(res, costPrice, sellingPrice) {
+  return res.status(409).json({
+    code: 'PRICE_NOT_ABOVE_COST',
+    message: `Selling price (${(Number(sellingPrice) || 0).toFixed(2)}) is not greater than cost price (${(Number(costPrice) || 0).toFixed(2)}). This product would sell at no profit or at a loss.`,
+  });
+}
+
+function auditLowMargin(userId, productId, name, costPrice, sellingPrice, context) {
+  db.prepare(
+    `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES (?, 'LOW_MARGIN_CONFIRMED', 'PRODUCT', ?, ?)`
+  ).run(userId, productId, JSON.stringify({ product_name: name, cost_price: Number(costPrice) || 0, selling_price: Number(sellingPrice) || 0, context }));
+}
+
 // Get all active products (with optional search)
 router.get('/', (req, res) => {
   const { q } = req.query;
@@ -301,6 +320,7 @@ router.post(
     const results = [];
     let validCount = 0;
     let errorCount = 0;
+    let needsConfirmationCount = 0;
 
     const parseDate = (value) => {
       const v = String(value || '').trim();
@@ -323,6 +343,7 @@ router.post(
       const errors = {}; // Field-level errors
       const warnings = []; // General warnings
       let isValid = true;
+      let needsConfirmation = false; // selling price not above cost
 
       const name = String(data['Product Name'] || '').trim();
       const categoryName = String(data.Category || '').trim();
@@ -370,11 +391,12 @@ router.post(
       if (!sellingPriceStr || Number.isNaN(sellingPrice) || sellingPrice < 0) {
         errors['Selling Price'] = 'Selling Price must be a valid positive number';
         isValid = false;
-      } else if (costPriceStr && !Number.isNaN(costPrice) && sellingPrice < costPrice) {
-        errors['Selling Price'] = 'Selling Price must be greater than or equal to Cost Price';
-        isValid = false;
-      } else if (costPriceStr && !Number.isNaN(costPrice) && sellingPrice === costPrice) {
-        warnings.push('Selling Price equals Cost Price (no profit margin)');
+      } else if (costPriceStr && !Number.isNaN(costPrice) && priceNotAboveCost(costPrice, sellingPrice)) {
+        // Importable, but only after the user confirms (see /bulk-upload/import confirmLowMargin)
+        needsConfirmation = true;
+        warnings.push(
+          `Selling Price (${sellingPrice}) is not greater than Cost Price (${costPrice}): needs confirmation to import`
+        );
       }
 
       // Validate Opening Stock
@@ -449,6 +471,7 @@ router.post(
 
       if (isValid) {
         validCount += 1;
+        if (needsConfirmation) needsConfirmationCount += 1;
       } else {
         errorCount += 1;
       }
@@ -456,6 +479,7 @@ router.post(
       results.push({
         index: index + 2, // Excel row number (header is row 1)
         status: isValid ? 'valid' : 'error',
+        needsConfirmation: isValid && needsConfirmation,
         errors,
         warnings,
         data,
@@ -470,6 +494,7 @@ router.post(
         totalRows: rows.length,
         valid: validCount,
         errors: errorCount,
+        needsConfirmation: needsConfirmationCount,
       },
       rows: results,
     });
@@ -488,6 +513,9 @@ router.post(
 
     const autoCreateCategories =
       String(req.body.autoCreateCategories || '').toLowerCase() === 'true';
+    // Rows with selling price not above cost are imported only when the user confirmed them in the preview
+    const confirmLowMargin = isConfirmed(req.body.confirmLowMargin);
+    const userId = req.user.id;
     const jobId = `bulk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     // Initialize job progress
@@ -584,9 +612,10 @@ router.post(
             }
             const sellingPrice = sellingPriceResult.value;
 
-            // Validate Selling Price >= Cost Price (only if both are valid)
-            if (costPriceResult.valid && sellingPriceResult.valid && sellingPrice < costPrice) {
-              errors.push('Selling Price must be greater than or equal to Cost Price');
+            // Selling Price not above Cost Price: import only if the user confirmed it (only if both are valid)
+            const lowMargin = costPriceResult.valid && sellingPriceResult.valid && priceNotAboveCost(costPrice, sellingPrice);
+            if (lowMargin && !confirmLowMargin) {
+              errors.push('Selling Price is not greater than Cost Price: confirm the import to accept this row');
             }
 
             // Validate and parse Opening Stock
@@ -721,6 +750,10 @@ router.post(
                 // ignore product_code update errors
               }
 
+              if (lowMargin) {
+                auditLowMargin(userId, productId, name, costPrice, sellingPrice, 'bulk import (confirmed)');
+              }
+
               if (openingStock && openingStock !== 0) {
                 db.prepare(
                   `
@@ -794,6 +827,11 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       return res.status(400).json({ message: 'Name is required' });
     }
 
+    const lowMargin = priceNotAboveCost(costPrice ?? 0, sellingPrice ?? 0);
+    if (lowMargin && !isConfirmed(req.body.confirmLowMargin)) {
+      return lowMarginResponse(res, costPrice ?? 0, sellingPrice ?? 0);
+    }
+
     // Resolve category id from either categoryId or categoryName
     let resolvedCategoryId = categoryId || null;
     if (!resolvedCategoryId && categoryName && categoryName.trim()) {
@@ -855,6 +893,10 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       ).run(result.lastInsertRowid, openingStock);
     }
 
+    if (lowMargin) {
+      auditLowMargin(req.user.id, productId, name, costPrice ?? 0, sellingPrice ?? 0, 'product created');
+    }
+
     const product = db
       .prepare('SELECT * FROM products WHERE id = ?')
       .get(result.lastInsertRowid);
@@ -885,6 +927,13 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     mfd = existing.mfd,
     exp = existing.exp,
   } = req.body;
+
+  // Ask for confirmation only when this request sets a price (a status-only change must not be blocked)
+  const pricesChanging = req.body.costPrice !== undefined || req.body.sellingPrice !== undefined;
+  const lowMargin = pricesChanging && priceNotAboveCost(costPrice, sellingPrice);
+  if (lowMargin && !isConfirmed(req.body.confirmLowMargin)) {
+    return lowMarginResponse(res, costPrice, sellingPrice);
+  }
 
   let resolvedCategoryId = categoryId;
   if (!resolvedCategoryId && categoryName && categoryName.trim()) {
@@ -919,6 +968,10 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     exp || null,
     id
   );
+
+  if (lowMargin) {
+    auditLowMargin(req.user.id, id, name, costPrice, sellingPrice, 'product updated');
+  }
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   res.json(updated);
