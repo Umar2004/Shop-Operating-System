@@ -278,12 +278,17 @@ router.get('/sales/summary', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
     : 0;
 
   // Get total outstanding amount from customers
-  const outstanding = db.prepare('SELECT SUM(current_balance) as total FROM customers').get();
+  // current_balance is derived from invoices and payments (balances.js). Only positive balances are owed to
+  // the shop; customers who have overpaid hold credit, which is reported separately instead of netting it off
+  const outstanding = db
+    .prepare('SELECT SUM(MAX(0, current_balance)) as total, -SUM(MIN(0, current_balance)) as credit_held FROM customers')
+    .get();
 
   res.json({
     ...summary,
     profit_margin: parseFloat(profitMargin),
     total_outstanding: outstanding.total || 0,
+    customer_credit_held: outstanding.credit_held || 0,
   });
 });
 

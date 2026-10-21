@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
+const { toCents, invoicePaid, refreshInvoiceStatus, customerBalance, pastCreditLeft, refreshCustomerBalance } = require('./balances');
 
 
 const router = express.Router();
@@ -89,19 +90,17 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
       isActive = !!existing.is_active,
     } = req.body;
 
-    // Calculate difference if opening balance changed
-    const oldOpeningBalance = existing.opening_balance || 0;
-    const diff = openingBalance - oldOpeningBalance;
-
     // Transaction to ensure atomicity
     const tx = db.transaction(() => {
       db.prepare(
         `
         UPDATE customers
-        SET name = ?, phone = ?, address = ?, credit_limit = ?, opening_balance = ?, current_balance = current_balance + ?, is_active = ?
+        SET name = ?, phone = ?, address = ?, credit_limit = ?, opening_balance = ?, is_active = ?
         WHERE id = ?
       `
-      ).run(name, phone, address, creditLimit, openingBalance, diff, isActive ? 1 : 0, id);
+      ).run(name, phone, address, creditLimit, openingBalance, isActive ? 1 : 0, id);
+      // The balance follows from the opening balance, invoices and payments
+      refreshCustomerBalance(id);
 
       return db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
     });
@@ -192,134 +191,63 @@ router.post('/:id/pay-credit', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (re
     return res.status(404).json({ message: 'Customer not found' });
   }
 
-  if (amount > customer.current_balance) {
+  // Check against what the customer really owes (the stored figure may have drifted before this fix)
+  const owed = customerBalance(customerId);
+  if (toCents(amount) > toCents(owed)) {
     return res.status(400).json({
-      message: `Payment amount (${amount}) exceeds customer balance (${customer.current_balance})`,
+      message: `Payment amount (${Number(amount).toFixed(2)}) exceeds the balance owed (${owed.toFixed(2)})`,
     });
   }
 
   const tx = db.transaction(() => {
-    let remainingPayment = amount;
-
-    // Helper to apply payment to accurate status
-    const updateInvoicePayment = (invId, payAmt, note = null) => {
-      // Insert payment record
+    // Work in cents so the allocation adds up exactly
+    let remainingCents = toCents(amount);
+    const invoiceOwedCents = (invId) => {
+      const inv = db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(invId);
+      return Math.max(0, toCents(inv.total_amount) - toCents(invoicePaid(invId)));
+    };
+    const pay = (invId, cents, note) => {
+      if (cents <= 0) return;
       db.prepare(
         `
         INSERT INTO payments (customer_id, invoice_id, payment_type, amount, note)
         VALUES (?, ?, ?, ?, ?)
       `
-      ).run(customerId, invId, paymentType, payAmt, note);
-
-      if (invId) {
-        // Get updated total paid for this invoice
-        const payments = db
-          .prepare('SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE invoice_id = ?')
-          .get(invId);
-        const invoice = db.prepare('SELECT total_amount FROM invoices WHERE id = ?').get(invId);
-
-        // Update status
-        let newStatus = 'CREDIT';
-        if (payments.total_paid >= invoice.total_amount) {
-          newStatus = 'PAID';
-        } else if (payments.total_paid > 0) {
-          newStatus = 'PARTIAL';
-        }
-
-        db.prepare('UPDATE invoices SET payment_status = ? WHERE id = ?').run(newStatus, invId);
-      }
+      ).run(customerId, invId, paymentType, cents / 100, note);
+      if (invId) refreshInvoiceStatus(invId);
+      remainingCents -= cents;
     };
 
     if (invoiceId === 'PAST_CREDIT') {
-      // Direct payment to opening balance
-      const totalUnpaidInvoices = db.prepare(`
-        SELECT COALESCE(SUM(total_amount - paid), 0) as total
-        FROM (
-          SELECT total_amount, COALESCE((SELECT SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END) FROM payments WHERE invoice_id = invoices.id), 0) as paid
-          FROM invoices WHERE customer_id = ? AND payment_status != 'PAID'
-        )
-      `).get(customerId).total;
-      const currentBalance = db.prepare('SELECT current_balance FROM customers WHERE id = ?').get(customerId).current_balance;
-      const pastCreditBalance = Math.max(0, currentBalance - totalUnpaidInvoices);
-
-      const amtToApply = Math.min(amount, pastCreditBalance);
-      updateInvoicePayment(null, amtToApply, 'Payment for Past Credit');
-      remainingPayment -= amtToApply;
-      // Fall through to FIFO for any remainder after settling past credit
+      pay(null, Math.min(remainingCents, toCents(pastCreditLeft(customerId))), 'Payment for Past Credit');
     } else if (invoiceId) {
-      // Specific invoice payment
       const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
       if (!invoice || invoice.customer_id !== customerId) {
         throw new Error('Invalid invoice');
       }
-      
-      const paidAlready = db.prepare('SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE invoice_id = ?').get(invoiceId).total_paid;
-      const balance = invoice.total_amount - paidAlready;
-      
-      const amtToApply = Math.min(amount, balance);
-      updateInvoicePayment(invoiceId, amtToApply, amount > balance ? `Full payment for ${invoice.invoice_number}` : null);
-      remainingPayment -= amtToApply;
-      // Fall through to FIFO for any remainder after settling this specific invoice
+      pay(invoice.id, Math.min(remainingCents, invoiceOwedCents(invoice.id)), null);
     }
 
-    // Now handle the remaining payment (General Payment / Overflow)
-    if (remainingPayment > 0) {
-      // 1. Calculate how much of current_balance is actually "Past Credit"
-      const customer = db.prepare('SELECT current_balance FROM customers WHERE id = ?').get(customerId);
-      const unpaidInvoices = db.prepare("SELECT id, total_amount, payment_status FROM invoices WHERE customer_id = ? AND payment_status != 'PAID'").all(customerId);
-      
-      let totalUnpaidInvoiceAmt = 0;
-      for (const inv of unpaidInvoices) {
-        const paid = db.prepare("SELECT COALESCE(SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END), 0) as total_paid FROM payments WHERE invoice_id = ?").get(inv.id).total_paid;
-        totalUnpaidInvoiceAmt += (inv.total_amount - paid);
-      }
-
-      const pastCreditBalance = Math.max(0, customer.current_balance - totalUnpaidInvoiceAmt);
-      
-      // 2. Pay Past Credit First (if not already paid above)
-      if (pastCreditBalance > 0) {
-        const amtToPastCredit = Math.min(remainingPayment, pastCreditBalance);
-        updateInvoicePayment(null, amtToPastCredit, 'Payment for Past Credit (FIFO)');
-        remainingPayment -= amtToPastCredit;
-      }
-
-      // 3. Pay Invoices (Oldest First)
-      if (remainingPayment > 0) {
-        const invoiceList = db
-          .prepare(
-            `
-          SELECT 
-            id, total_amount,
-            COALESCE((SELECT SUM(CASE WHEN payment_type != 'CREDIT' THEN amount ELSE 0 END) FROM payments WHERE invoice_id = invoices.id), 0) as paid_amount
-          FROM invoices
-          WHERE customer_id = ? AND payment_status != 'PAID'
-          ORDER BY date_time ASC
-        `
-          )
-          .all(customerId);
-
-        for (const inv of invoiceList) {
-          if (remainingPayment <= 0) break;
-
-          const balance = inv.total_amount - inv.paid_amount;
-          if (balance <= 0) continue;
-
-          const amountToApply = Math.min(remainingPayment, balance);
-          updateInvoicePayment(inv.id, amountToApply, 'Overpayment Distribution (FIFO)');
-          remainingPayment -= amountToApply;
-        }
+    // Anything left: remaining opening balance first, then the oldest invoices that still owe money
+    // (judged by money received, not by the status flag)
+    if (remainingCents > 0) {
+      pay(null, Math.min(remainingCents, toCents(pastCreditLeft(customerId))), 'Payment for Past Credit (FIFO)');
+    }
+    if (remainingCents > 0) {
+      const invoiceList = db
+        .prepare('SELECT id FROM invoices WHERE customer_id = ? ORDER BY date_time ASC, id ASC')
+        .all(customerId);
+      for (const inv of invoiceList) {
+        if (remainingCents <= 0) break;
+        pay(inv.id, Math.min(remainingCents, invoiceOwedCents(inv.id)), 'Overpayment Distribution (FIFO)');
       }
     }
+    // Possible only when earlier payments on account already exceeded the opening balance
+    if (remainingCents > 0) {
+      pay(null, remainingCents, 'Payment on account');
+    }
 
-    // Finally, update customer balance (total credit owed)
-    db.prepare(
-      `
-      UPDATE customers
-      SET current_balance = MAX(0, current_balance - ?)
-      WHERE id = ?
-    `
-    ).run(amount, customerId);
-
+    refreshCustomerBalance(customerId);
     return db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
   });
 
