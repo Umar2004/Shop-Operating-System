@@ -193,6 +193,13 @@ function Sell() {
 
   const remainingBalance = Math.max(finalTotal - totalPaid, 0);
 
+  // Money actually collected now (credit-type lines are not money), and the part going on the customer's credit
+  const collectedNow = Math.min(
+    payments.filter((p) => p.type !== 'CREDIT').reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+    finalTotal
+  );
+  const toCreditNow = customer ? Math.max((Math.round(finalTotal * 100) - Math.round(collectedNow * 100)) / 100, 0) : 0;
+
   // Calculate change/balance when customer pays more than total (for cash payments)
   const changeAmount = useMemo(() => {
     if (totalPaid > finalTotal) {
@@ -1181,7 +1188,11 @@ function Sell() {
                 (!customer && payments.some((p) => p.type === 'CASH' && (p.amount === 0 || Math.round(p.amount * 100) < Math.round(finalTotal * 100))))
               }
             >
-              Pay {formatCurrency(finalTotal)}
+              {toCreditNow > 0
+                ? collectedNow > 0
+                  ? `Pay ${formatCurrency(collectedNow)} now · ${formatCurrency(toCreditNow)} to credit`
+                  : `Put ${formatCurrency(toCreditNow)} on credit`
+                : `Pay ${formatCurrency(finalTotal)}`}
             </Button>
           </Box>
         </Paper>
