@@ -137,6 +137,13 @@ export const api = {
     request(`/customers/${customerId}/invoices`),
   getCustomerPayments: (customerId) =>
     request(`/customers/${customerId}/payments`),
+  // Activity log (admin, or manager with the Activity Log page)
+  getActivityPage: (params = {}) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== '' && v !== undefined && v !== null) q.append(k, v);
+    return request(`/audit-logs/page?${q.toString()}`);
+  },
+  getActivityFilters: () => request('/audit-logs/filters'),
   getCustomerAdjustments: (customerId) =>
     request(`/customers/${customerId}/adjustments`),
   // payload: { type: 'WRITE_OFF' | 'REFUND' | 'CHARGE', amount, reason, invoiceId?, paymentType? }

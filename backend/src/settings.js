@@ -1,12 +1,14 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole, endAllLogins } = require('./auth');
+const { requireRole, endAllLogins, requirePermission } = require('./auth');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const multer = require('multer');
 
 const router = express.Router();
+// Every settings change and backup action goes to the activity log (see activityLog.js)
+router.use(require('./activityLog').settingsActivityLogger);
 
 // A backup is only usable if SQLite says the whole file is intact and the core tables are present.
 // ('SELECT 1' only proves the header and schema can be read, not the data pages.)
@@ -157,12 +159,17 @@ const backupUpload = multer({
   },
 });
 
+// Secrets among the settings: only admins and managers (who set them up) may read them
+const SECRET_SETTINGS = new Set(['sms.api_key']);
+const maySeeSecrets = (req) => req.user && (req.user.role === 'ADMIN' || req.user.role === 'MANAGER');
+
 // Get all settings (readable by all authenticated users for shop name, logo, etc.)
 router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const settings = db.prepare('SELECT key, value FROM settings').all();
     const settingsObj = {};
     settings.forEach((s) => {
+      if (SECRET_SETTINGS.has(s.key) && !maySeeSecrets(req)) return;
       settingsObj[s.key] = s.value;
     });
     res.json(settingsObj);
@@ -184,7 +191,7 @@ router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Update multiple settings (MUST come before /:key route)
-router.put('/bulk', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/bulk', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { settings } = req.body;
     if (!settings || typeof settings !== 'object') {
@@ -211,7 +218,7 @@ router.put('/bulk', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Test write permissions for backup path
-router.post('/backup/test-write', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.post('/backup/test-write', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { path: pathToTest } = req.body;
     if (!pathToTest || typeof pathToTest !== 'string') {
@@ -262,7 +269,7 @@ router.post('/backup/test-write', requireRole(['ADMIN', 'MANAGER']), (req, res) 
 });
 
 // Get backup status
-router.get('/backup/status', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/backup/status', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const lastSuccess = db.prepare('SELECT value FROM settings WHERE key = ?').get('backup.last_success');
     const lastError = db.prepare('SELECT value FROM settings WHERE key = ?').get('backup.last_error');
@@ -279,7 +286,7 @@ router.get('/backup/status', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Validate backup path (keep for backward compatibility)
-router.post('/backup/validate-path', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.post('/backup/validate-path', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { path: pathToValidate } = req.body;
     if (!pathToValidate || typeof pathToValidate !== 'string') {
@@ -336,7 +343,7 @@ router.post('/backup/validate-path', requireRole(['ADMIN', 'MANAGER']), (req, re
 });
 
 // List backups (MUST come before /:key route)
-router.get('/backups', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/backups', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     let backups = [];
     
@@ -429,7 +436,7 @@ router.get('/backups', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 
 // Printer Settings Endpoints (MUST come before /:key route)
 // Get printer settings
-router.get('/printer', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/printer', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const nameSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('printer.name');
     const paperSizeSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('printer.paperSize');
@@ -454,7 +461,7 @@ router.get('/printer', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Update printer settings
-router.put('/printer', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/printer', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { name, paperSize, silentPrint, autoCut, printLogo, useDirect, usbDeviceId } = req.body;
 
@@ -490,7 +497,7 @@ router.put('/printer', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Get receipt customization settings
-router.get('/receipt', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/receipt', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const headerAlign = db.prepare('SELECT value FROM settings WHERE key = ?').get('receipt.headerAlign');
     const itemAlign = db.prepare('SELECT value FROM settings WHERE key = ?').get('receipt.itemAlign');
@@ -525,7 +532,7 @@ router.get('/receipt', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Update receipt customization settings
-router.put('/receipt', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/receipt', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { headerAlign, itemAlign, totalAlign, footerAlign, fontSize, headerFontSize, itemFontSize, totalFontSize, padding, paddingLeft, paddingRight, lineSpacing } = req.body;
 
@@ -577,8 +584,11 @@ router.put('/receipt', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Get single setting
-router.get('/:key', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/:key', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
+    if (SECRET_SETTINGS.has(req.params.key) && !maySeeSecrets(req)) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
     const setting = db.prepare('SELECT key, value FROM settings WHERE key = ?').get(req.params.key);
     if (!setting) {
       return res.status(404).json({ message: 'Setting not found' });
@@ -622,7 +632,7 @@ router.get('/backup/schedule', requireRole(['ADMIN', 'MANAGER']), (req, res) => 
 });
 
 // Update backup schedule
-router.put('/backup/schedule', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/backup/schedule', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const {
       daily,
@@ -694,7 +704,7 @@ router.post('/backup/end-day', requireRole(['ADMIN', 'MANAGER']), async (req, re
 });
 
 // Update single setting
-router.put('/:key', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/:key', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { value } = req.body;
     if (value === undefined) {
@@ -746,7 +756,7 @@ router.put('/:key', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Create backup
-router.post('/backup', requireRole(['ADMIN']), async (req, res) => {
+router.post('/backup', requirePermission('settings', 'dashboard'), requireRole(['ADMIN']), async (req, res) => {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupFilename = `sop_backup_${timestamp}.db`;
@@ -845,7 +855,7 @@ router.post('/backup', requireRole(['ADMIN']), async (req, res) => {
 });
 
 // Upload backup - handle multer errors with custom error handler
-router.post('/backup/upload', requireRole(['ADMIN']), (req, res, next) => {
+router.post('/backup/upload', requirePermission('settings'), requireRole(['ADMIN']), (req, res, next) => {
   backupUpload.single('file')(req, res, (err) => {
     if (err) {
       console.error('Multer error during backup upload:', err);
@@ -962,7 +972,7 @@ router.post('/backup/upload', requireRole(['ADMIN']), (req, res, next) => {
 });
 
 // Restore from backup
-router.post('/backup/restore/:filename', requireRole(['ADMIN']), async (req, res) => {
+router.post('/backup/restore/:filename', requirePermission('settings'), requireRole(['ADMIN']), async (req, res) => {
   try {
     const { filename } = req.params;
     const backupDir = getBackupDir();
@@ -1074,7 +1084,7 @@ router.post('/backup/restore/:filename', requireRole(['ADMIN']), async (req, res
 });
 
 // Delete backup file (allow ADMIN, MANAGER, and CASHIER)
-router.delete('/backup/:filename', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), async (req, res) => {
+router.delete('/backup/:filename', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
     const { filename } = req.params;
     const decodedFilename = decodeURIComponent(filename);
@@ -1105,7 +1115,7 @@ router.delete('/backup/:filename', requireRole(['ADMIN', 'MANAGER', 'CASHIER']),
 });
 
 // Reset system (clear all data except admin user and system tables)
-router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
+router.post('/reset', requirePermission('settings'), requireRole(['ADMIN']), async (req, res) => {
   try {
     const { confirmation } = req.body;
     if (confirmation !== 'RESET') {
@@ -1196,7 +1206,7 @@ router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
 });
 
 // Upload logo
-router.post('/logo', requireRole(['ADMIN', 'MANAGER']), logoUpload.single('logo'), (req, res) => {
+router.post('/logo', requirePermission('settings'), requireRole(['ADMIN', 'MANAGER']), logoUpload.single('logo'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });

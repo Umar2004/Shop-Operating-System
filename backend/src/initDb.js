@@ -292,6 +292,14 @@ function runMigrations() {
     console.error('Failed to migrate payments table:', e);
   }
 
+  // Activity log: indexes for the Activity Log page filters (newest first, by user, by action, by record)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+  `);
+
   // Logins carry the user's token_version; moving it on ends every login of that user (see auth.js)
   try {
     db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
@@ -440,6 +448,34 @@ function initDb() {
     require('./passwords').flagDefaultPasswords();
   } catch (e) {
     console.error('Failed to check for default passwords:', e);
+  }
+  pruneActivityLog();
+}
+
+// Activity log retention: keep 2 years of records, and 1 year of logins/logouts/failed logins (the bulk of the
+// rows). Settings activity.retention_days / activity.login_retention_days change it; nothing newer is touched.
+function pruneActivityLog() {
+  try {
+    const days = (key, fallback) => {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+      const n = row ? parseInt(row.value, 10) : NaN;
+      return Number.isFinite(n) ? Math.max(90, n) : fallback; // never less than 90 days
+    };
+    const all = days('activity.retention_days', 730);
+    const logins = Math.min(all, days('activity.login_retention_days', 365));
+    const old = db.prepare("DELETE FROM audit_logs WHERE created_at < datetime('now', ?)").run(`-${all} days`).changes;
+    const oldLogins = db
+      .prepare("DELETE FROM audit_logs WHERE action IN ('LOGIN', 'LOGOUT', 'LOGIN_FAILED') AND created_at < datetime('now', ?)")
+      .run(`-${logins} days`).changes;
+    if (old + oldLogins > 0) {
+      require('./activityLog').logActivity({
+        action: 'ACTIVITY_LOG_PRUNED',
+        entityType: 'SYSTEM',
+        details: { removed: old + oldLogins, older_than_days: all, logins_older_than_days: logins },
+      });
+    }
+  } catch (e) {
+    console.error('Failed to prune the activity log:', e);
   }
 }
 

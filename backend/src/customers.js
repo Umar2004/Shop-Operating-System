@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 const {
   toCents,
   ADJUSTMENT_TYPES,
@@ -57,7 +58,7 @@ router.get('/', (req, res) => {
 });
 
 // Create customer
-router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/', requirePermission('customers', 'sell'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const { name, phone, address, creditLimit = 0, openingBalance = 0 } = req.body;
     if (!name) {
@@ -79,6 +80,8 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const customer = db
       .prepare('SELECT * FROM customers WHERE id = ?')
       .get(result.lastInsertRowid);
+    logActivity({ userId: req.user.id, action: 'CUSTOMER_CREATED', entityType: 'CUSTOMER', entityId: customer.id,
+      after: { name: customer.name, phone: customer.phone, credit_limit: customer.credit_limit, opening_balance: customer.opening_balance } });
     res.status(201).json(customer);
   } catch (err) {
     console.error('Error creating customer:', err);
@@ -87,7 +90,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Update customer
-router.put('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.put('/:id', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
@@ -133,6 +136,10 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
     });
 
     const updated = tx();
+    const change = changedFields(existing, updated, ['name', 'phone', 'address', 'credit_limit', 'opening_balance', 'is_active']);
+    if (change) {
+      logActivity({ userId: req.user.id, action: 'CUSTOMER_UPDATED', entityType: 'CUSTOMER', entityId: id, details: { name: updated.name }, ...change });
+    }
     res.json(updated);
   } catch (err) {
     console.error('Error updating customer:', err);
@@ -141,7 +148,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Deactivate customer
-router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.delete('/:id', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const id = Number(req.params.id);
     const existing = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
@@ -149,6 +156,7 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
       return res.status(404).json({ message: 'Customer not found' });
     }
     db.prepare('UPDATE customers SET is_active = 0 WHERE id = ?').run(id);
+    logActivity({ userId: req.user.id, action: 'CUSTOMER_DEACTIVATED', entityType: 'CUSTOMER', entityId: id, details: { name: existing.name } });
     res.json({ success: true });
   } catch (err) {
     console.error('Error deactivating customer:', err);
@@ -157,7 +165,7 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Get customer invoices
-router.get('/:id/invoices', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/:id/invoices', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const id = Number(req.params.id);
     const invoices = db
@@ -186,7 +194,7 @@ router.get('/:id/invoices', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
 });
 
 // Get customer payments
-router.get('/:id/payments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/:id/payments', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const id = Number(req.params.id);
     const payments = db
@@ -208,7 +216,7 @@ router.get('/:id/payments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
 });
 
 // Balance adjustments: write-offs, charges and refunds (newest first)
-router.get('/:id/adjustments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/:id/adjustments', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const id = Number(req.params.id);
     const rows = db
@@ -231,7 +239,7 @@ router.get('/:id/adjustments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (re
 });
 
 // Record a write-off (forgiven debt), a charge (debt on no invoice) or a refund (overpayment handed back)
-router.post('/:id/adjustments', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.post('/:id/adjustments', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const customerId = Number(req.params.id);
   const { type, amount, reason, invoiceId = null, paymentType = 'CASH' } = req.body || {};
 
@@ -313,7 +321,7 @@ router.post('/:id/adjustments', requireRole(['ADMIN', 'MANAGER']), (req, res) =>
 });
 
 // Record credit payment
-router.post('/:id/pay-credit', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/:id/pay-credit', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const customerId = Number(req.params.id);
   const { amount, paymentType = 'CASH', invoiceId } = req.body;
 
@@ -382,7 +390,10 @@ router.post('/:id/pay-credit', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (re
       pay(null, remainingCents, 'Payment on account');
     }
 
-    refreshCustomerBalance(customerId);
+    const balanceAfter = refreshCustomerBalance(customerId);
+    logActivity({ userId: req.user.id, action: 'CREDIT_PAYMENT_RECEIVED', entityType: 'CUSTOMER', entityId: customerId,
+      details: { name: customer.name, amount: toCents(amount) / 100, payment_type: paymentType, applied_to: invoiceId || 'oldest first' },
+      before: { balance: owed }, after: { balance: balanceAfter } });
     return db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
   });
 

@@ -16,7 +16,7 @@ import {
 } from '@mui/material';
 import { useState, useEffect } from 'react';
 import { FaCashRegister, FaUsers, FaChartBar, FaCogs } from 'react-icons/fa';
-import { MdDashboard, MdInventory, MdLogout, MdCategory, MdChevronLeft, MdChevronRight, MdMenu, MdClose, MdPeople, MdReceipt, MdVpnKey } from 'react-icons/md';
+import { MdDashboard, MdInventory, MdLogout, MdCategory, MdChevronLeft, MdChevronRight, MdMenu, MdClose, MdPeople, MdReceipt, MdVpnKey, MdHistory } from 'react-icons/md';
 import { useAuthStore } from '../store/authStore';
 import ClockCalendar from '../components/ClockCalendar';
 import { api } from '../api/client';
@@ -51,6 +51,7 @@ const menuSections = [
     items: [
       { label: 'Settings', icon: <FaCogs />, path: '/settings', permission: 'settings' },
       { label: 'Users', icon: <MdPeople />, path: '/users', adminOnly: true, permission: 'users' },
+      { label: 'Activity Log', icon: <MdHistory />, path: '/activity', permission: 'activity' },
     ],
   },
 ];

@@ -68,7 +68,7 @@ function generateToken(user) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 }
 
-const ALL_PAGES = ['dashboard', 'sell', 'products', 'categories', 'customers', 'invoices', 'expenses', 'reports', 'settings', 'users'];
+const ALL_PAGES = ['dashboard', 'sell', 'products', 'categories', 'customers', 'invoices', 'expenses', 'reports', 'settings', 'activity', 'users'];
 
 function permissionsFor(user) {
   // ADMIN has access to all pages
@@ -192,8 +192,8 @@ function authMiddleware(req, res, next) {
   if (!user || !user.is_active || decoded.tv !== user.token_version) {
     return res.status(401).json({ code: 'LOGIN_ENDED', message: 'Your login has ended. Please log in again.' });
   }
-  // Role and name come from the database, so a role change applies at once
-  req.user = { id: user.id, username: user.username, role: user.role_name };
+  // Role, name and page permissions come from the database, so a change applies at once
+  req.user = { id: user.id, username: user.username, role: user.role_name, permissions: permissionsFor(user) };
   // Until a required new password is set, nothing else can be done with this login
   const url = req.originalUrl.split('?')[0];
   if (user.must_change_password && !['/api/auth/me', '/api/auth/logout', '/api/auth/change-password'].includes(url)) {
@@ -281,10 +281,23 @@ function requireRole(roles) {
   };
 }
 
+// Page-permission guard: the user must have at least one of these pages (Users > permissions); ADMIN has all.
+// Works together with requireRole: the role sets what a kind of user may ever do, the pages narrow it per person.
+function requirePermission(...pages) {
+  return (req, res, next) => {
+    const granted = (req.user && req.user.permissions) || [];
+    if (req.user && (req.user.role === 'ADMIN' || pages.some((p) => granted.includes(p)))) {
+      return next();
+    }
+    return res.status(403).json({ code: 'NO_PAGE_PERMISSION', message: `You don't have access to this (needs: ${pages.join(' or ')}). Ask the admin.` });
+  };
+}
+
 module.exports = {
   authRouter: router,
   authMiddleware,
   requireRole,
+  requirePermission,
   endLogins,
   endAllLogins,
 };

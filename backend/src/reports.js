@@ -1,12 +1,12 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
 const { sessionMoney } = require('./balances');
 
 const router = express.Router();
 
 // Day summary report by business date (CASHIER can view their own day summary)
-router.get('/day-summary', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/day-summary', requirePermission('dashboard', 'reports'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const { date } = req.query; // YYYY-MM-DD
   if (!date) {
     return res.status(400).json({ message: 'date (YYYY-MM-DD) is required' });
@@ -112,7 +112,7 @@ router.get('/day-summary', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, r
 });
 
 // Sales Trends - Time series data
-router.get('/sales/trends', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/sales/trends', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { startDate, endDate, groupBy = 'day' } = req.query;
 
   if (!startDate || !endDate) {
@@ -156,7 +156,7 @@ router.get('/sales/trends', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Sales by Payment Method
-router.get('/sales/payment-methods', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/sales/payment-methods', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { startDate, endDate } = req.query;
 
   if (!startDate || !endDate) {
@@ -182,7 +182,7 @@ router.get('/sales/payment-methods', requireRole(['ADMIN', 'MANAGER']), (req, re
 });
 
 // Sales by Product Category
-router.get('/sales/by-category', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/sales/by-category', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { startDate, endDate } = req.query;
 
   if (!startDate || !endDate) {
@@ -212,7 +212,7 @@ router.get('/sales/by-category', requireRole(['ADMIN', 'MANAGER']), (req, res) =
 });
 
 // Top Products
-router.get('/sales/top-products', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/sales/top-products', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { startDate, endDate, limit = 10, sortBy = 'revenue' } = req.query;
 
   if (!startDate || !endDate) {
@@ -248,7 +248,7 @@ router.get('/sales/top-products', requireRole(['ADMIN', 'MANAGER']), (req, res) 
 });
 
 // Sales Summary (KPIs)
-router.get('/sales/summary', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/sales/summary', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { startDate, endDate } = req.query;
 
   if (!startDate || !endDate) {
@@ -307,7 +307,7 @@ router.get('/sales/summary', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Detailed Sales List (CASHIER can view sales details)
-router.get('/sales/detail', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/sales/detail', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const {
     startDate,
     endDate,
@@ -396,7 +396,7 @@ router.get('/sales/detail', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
 });
 
 // Stock Valuation Report
-router.get('/stock-valuation', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.get('/stock-valuation', requirePermission('reports'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   try {
     const { search = '', categoryId = '' } = req.query;
 

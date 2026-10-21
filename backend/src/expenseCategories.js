@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 
 const router = express.Router();
 
@@ -20,7 +21,7 @@ router.get('/', (req, res) => {
 });
 
 // Create a new expense category (CASHIER can create categories for expenses)
-router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/', requirePermission('categories', 'expenses'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ message: 'Category name is required' });
@@ -39,6 +40,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const category = db
       .prepare('SELECT id, name FROM expense_categories WHERE id = ?')
       .get(result.lastInsertRowid);
+    logActivity({ userId: req.user.id, action: 'EXPENSE_CATEGORY_CREATED', entityType: 'EXPENSE_CATEGORY', entityId: category.id, after: { name: category.name } });
 
     res.status(201).json(category);
   } catch (err) {
@@ -51,7 +53,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Delete expense category (soft delete - set is_active = 0)
-router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.delete('/:id', requirePermission('categories'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
   if (!id) {
     return res.status(400).json({ message: 'Invalid category ID' });
@@ -83,6 +85,7 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   // Soft delete (set is_active = 0)
   try {
     db.prepare('UPDATE expense_categories SET is_active = 0 WHERE id = ?').run(id);
+    logActivity({ userId: req.user.id, action: 'EXPENSE_CATEGORY_DELETED', entityType: 'EXPENSE_CATEGORY', entityId: id, before: { name: category.name } });
     res.json({ success: true, message: 'Category deleted successfully' });
   } catch (err) {
     console.error('Error deleting expense category', err);
@@ -91,7 +94,7 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
 });
 
 // Bulk delete expense categories
-router.post('/bulk-delete', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.post('/bulk-delete', requirePermission('categories'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: 'ids must be a non-empty array' });
@@ -140,6 +143,9 @@ router.post('/bulk-delete', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
     }
   });
 
+  if (deleted.length) {
+    logActivity({ userId: req.user.id, action: 'EXPENSE_CATEGORY_DELETED', entityType: 'EXPENSE_CATEGORY', details: { count: deleted.length, category_ids: deleted } });
+  }
   res.json({
     success: true,
     deleted: deleted.length,

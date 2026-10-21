@@ -262,6 +262,11 @@ function Users() {
           loadData();
           setTimeout(() => setSuccess(''), 3000);
         } catch (err) {
+          // Someone with history in the shop records stays on record: offer to deactivate them instead
+          if (err.data?.code === 'USER_HAS_HISTORY' && user.is_active) {
+            confirm(`${err.message} Deactivate ${user.username} now?`, () => handleToggleActive(user));
+            return;
+          }
           setError(err.message || 'Failed to delete user');
         }
       },

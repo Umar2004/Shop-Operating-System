@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ function getOpenSession() {
 }
 
 // Record an expense (CASHIER can record expenses)
-router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/', requirePermission('expenses'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const { category, description, amount } = req.body;
   const userId = req.user.id;
 
@@ -37,12 +38,13 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const expense = db
     .prepare('SELECT * FROM expenses WHERE id = ?')
     .get(result.lastInsertRowid);
+  logActivity({ userId, action: 'EXPENSE_RECORDED', entityType: 'EXPENSE', entityId: expense.id, after: { category: expense.category, description: expense.description, amount: expense.amount } });
 
   res.status(201).json(expense);
 });
 
 // List expenses for current or specific session (CASHIER can view expenses)
-router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/', requirePermission('expenses'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const { sessionId } = req.query;
   let sid = sessionId ? Number(sessionId) : null;
 
@@ -68,7 +70,7 @@ router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Update expense
-router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.put('/:id', requirePermission('expenses'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const id = Number(req.params.id);
   const { category, description, amount } = req.body;
 
@@ -76,6 +78,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     return res.status(400).json({ message: 'Category and numeric amount are required' });
   }
 
+  const before = db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
   const result = db
     .prepare(
       `
@@ -89,19 +92,25 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   if (result.changes === 0) {
     return res.status(404).json({ message: 'Expense not found' });
   }
+  const change = changedFields(before, db.prepare('SELECT * FROM expenses WHERE id = ?').get(id), ['category', 'description', 'amount']);
+  if (change) {
+    logActivity({ userId: req.user.id, action: 'EXPENSE_UPDATED', entityType: 'EXPENSE', entityId: id, ...change });
+  }
 
   res.json({ success: true });
 });
 
 // Delete expense
-router.delete('/:id', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.delete('/:id', requirePermission('expenses'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
 
+  const before = db.prepare('SELECT * FROM expenses WHERE id = ?').get(id);
   const result = db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
 
   if (result.changes === 0) {
     return res.status(404).json({ message: 'Expense not found' });
   }
+  logActivity({ userId: req.user.id, action: 'EXPENSE_DELETED', entityType: 'EXPENSE', entityId: id, before: { category: before.category, description: before.description, amount: before.amount } });
 
   res.json({ success: true });
 });

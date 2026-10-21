@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 const {
   invoicePaid,
   invoiceWrittenOff,
@@ -118,7 +119,7 @@ function getOpenSession() {
 }
 
 // Create invoice (billing)
-router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/', requirePermission('sell'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const userId = req.user.id;
   const { customerId, items, payments, discount = 0, additionalAmount = 0 } = req.body;
 
@@ -365,6 +366,10 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       )
       .all(invoiceId);
 
+    logActivity({ userId, action: 'SALE', entityType: 'INVOICE', entityId: invoiceId,
+      details: { invoice_number: invoice.invoice_number, total: invoice.total_amount, customer_id: invoice.customer_id, payment_status: invoice.payment_status,
+        payments: storedPayments.filter((p) => p.amount > 0).map((p) => ({ type: p.type, amount: p.amount / 100 })), lines: invoiceItems.length } });
+
     return { invoice, items: invoiceItems };
   });
 
@@ -381,7 +386,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // List all invoices with filters and pagination
-router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/', requirePermission('invoices', 'customers', 'reports'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const {
       startDate,
@@ -475,7 +480,7 @@ router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Get payments for an invoice (MUST come before /:id to avoid route conflicts)
-router.get('/:id/payments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/:id/payments', requirePermission('invoices', 'customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const id = Number(req.params.id);
   const payments = db
     .prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY created_at DESC')
@@ -485,7 +490,7 @@ router.get('/:id/payments', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
 
 // Simple endpoint to get invoice by id (for reprint / history)
 // NOTE: This must come after /:id/payments and before /customer/:customerId to avoid route conflicts
-router.get('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/:id', requirePermission('sell', 'invoices', 'customers', 'reports'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const id = Number(req.params.id);
   const invoice = db
     .prepare(
@@ -521,7 +526,7 @@ router.get('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Get invoices by customer
-router.get('/customer/:customerId', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/customer/:customerId', requirePermission('customers', 'invoices'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const customerId = Number(req.params.customerId);
   const invoices = db
     .prepare(
@@ -538,7 +543,7 @@ router.get('/customer/:customerId', requireRole(['ADMIN', 'MANAGER', 'CASHIER'])
 });
 
 // Delete invoice (soft delete - set status or remove) - CASHIER can delete invoices
-router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.delete('/:id', requirePermission('invoices', 'customers'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
   if (!invoice) {
@@ -612,7 +617,7 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) =
 });
 
 // Update invoice (edit) - CASHIER can edit invoices
-router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.put('/:id', requirePermission('invoices', 'customers'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const id = Number(req.params.id);
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
   if (!invoice) {
@@ -842,7 +847,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Delete payment
-router.delete('/payments/:paymentId', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.delete('/payments/:paymentId', requirePermission('customers', 'invoices'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const paymentId = Number(req.params.paymentId);
   const payment = db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId);
   if (!payment) {
@@ -855,6 +860,8 @@ router.delete('/payments/:paymentId', requireRole(['ADMIN', 'MANAGER']), (req, r
 
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM payments WHERE id = ?').run(paymentId);
+    logActivity({ userId: req.user.id, action: 'PAYMENT_DELETED', entityType: 'PAYMENT', entityId: paymentId,
+      before: { amount: payment.amount, payment_type: payment.payment_type, invoice_id: payment.invoice_id, customer_id: customerIdForBalance, note: payment.note } });
     // Status and balance follow the money that is left
     if (invoice) refreshInvoiceStatus(invoice.id);
     refreshCustomerBalance(customerIdForBalance);
@@ -869,7 +876,7 @@ router.delete('/payments/:paymentId', requireRole(['ADMIN', 'MANAGER']), (req, r
 });
 
 // Update invoice payment status
-router.patch('/:id/status', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.patch('/:id/status', requirePermission('customers', 'invoices'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
   if (!invoice) {

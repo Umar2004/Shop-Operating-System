@@ -191,6 +191,15 @@ router.put('/:id', requireRole(['ADMIN']), (req, res) => {
     if (isAdminAccount && !newActive) {
       return res.status(400).json({ message: 'Cannot deactivate admin user' });
     }
+    // There must always be at least one active admin
+    if (existingUser.role_name === 'ADMIN' && existingUser.is_active && (newRole.name !== 'ADMIN' || !newActive)) {
+      const otherAdmins = db
+        .prepare("SELECT COUNT(*) AS n FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'ADMIN' AND u.is_active = 1 AND u.id != ?")
+        .get(userId).n;
+      if (otherAdmins === 0) {
+        return res.status(400).json({ message: 'This is the last active admin: make another user admin first' });
+      }
+    }
 
     db.transaction(() => {
       db.prepare('UPDATE users SET username = ?, role_id = ?, is_active = ? WHERE id = ?').run(newUsername, newRole.id, newActive, userId);
@@ -282,10 +291,12 @@ router.get('/permissions/available', requireRole(['ADMIN']), (req, res) => {
       { key: 'sell', label: 'Sell', description: 'Create invoices and process sales' },
       { key: 'products', label: 'Products', description: 'Manage products and inventory' },
       { key: 'categories', label: 'Categories', description: 'Manage product categories' },
-      { key: 'customers', label: 'Customers', description: 'Manage customers' },
+      { key: 'customers', label: 'Customers', description: 'Manage customers, credit repayments and write-offs' },
+      { key: 'invoices', label: 'Invoices', description: 'Look up, edit and delete invoices' },
       { key: 'expenses', label: 'Expenses', description: 'Record and manage expenses' },
       { key: 'reports', label: 'Reports', description: 'View sales reports and analytics' },
-      { key: 'settings', label: 'Settings', description: 'Access system settings' },
+      { key: 'settings', label: 'Settings', description: 'Access system settings and backups' },
+      { key: 'activity', label: 'Activity Log', description: 'See who did what (managers only)' },
     ];
     res.json(permissions);
   } catch (err) {

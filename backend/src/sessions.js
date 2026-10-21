@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const { requireRole } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 const { sessionMoney } = require('./balances');
 
 const router = express.Router();
@@ -105,6 +106,7 @@ router.post('/start', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) =
   const session = db
     .prepare('SELECT * FROM sessions WHERE id = ?')
     .get(result.lastInsertRowid);
+  logActivity({ userId, action: 'DAY_OPENED', entityType: 'SESSION', entityId: session.id, after: { business_date: session.business_date, opening_cash: session.opening_cash } });
 
   res.status(201).json(session);
 });
@@ -188,6 +190,8 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   ).run(expectedCash, actualCash || 0, difference, userId, session.id);
 
   const updated = db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id);
+  logActivity({ userId, action: 'DAY_CLOSED', entityType: 'SESSION', entityId: session.id,
+    details: { business_date: updated.business_date, expected_cash: expectedCash, counted_cash: actualCash || 0, difference } });
   res.json({
     ...updated,
     backup: backupResult,

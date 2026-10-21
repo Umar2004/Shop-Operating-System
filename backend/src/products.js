@@ -2,7 +2,8 @@ const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, requirePermission } = require('./auth');
+const { logActivity, changedFields } = require('./activityLog');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -112,7 +113,7 @@ router.get('/alerts', (req, res) => {
 });
 
 // Download Excel template for bulk upload
-router.get('/bulk-template', (req, res) => {
+router.get('/bulk-template', requirePermission('products'), (req, res) => {
   const header = [
     'Product Name',
     'Category',
@@ -154,7 +155,7 @@ router.get('/bulk-template', (req, res) => {
 });
 
 // Download all products as Excel
-router.get('/download', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/download', requirePermission('products'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const { status } = req.query;
 
@@ -283,7 +284,7 @@ const bulkUploadJobs = new Map();
 
 // Bulk upload products from Excel - Validation only (dry run) - CASHIER can validate
 router.post(
-  '/bulk-upload/validate',
+  '/bulk-upload/validate', requirePermission('products'),
   requireRole(['ADMIN', 'MANAGER', 'CASHIER']),
   upload.single('file'),
   (req, res) => {
@@ -504,7 +505,7 @@ router.post(
 
 // Bulk upload products from Excel - Actual import (only valid products)
 router.post(
-  '/bulk-upload/import',
+  '/bulk-upload/import', requirePermission('products'),
   requireRole(['ADMIN', 'MANAGER', 'CASHIER']),
   upload.single('file'),
   (req, res) => {
@@ -784,6 +785,8 @@ router.post(
 
         tx();
         job.status = 'completed';
+        logActivity({ userId: req.user.id, action: 'PRODUCTS_IMPORTED', entityType: 'PRODUCT',
+          details: { file: req.file && req.file.originalname, rows: job.total, added: job.inserted, failed: job.failed } });
       } catch (err) {
         console.error('Bulk upload import failed', err);
         const job = bulkUploadJobs.get(jobId);
@@ -799,7 +802,7 @@ router.post(
 );
 
 // Get bulk upload progress - CASHIER can check progress
-router.get('/bulk-upload/progress/:jobId', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.get('/bulk-upload/progress/:jobId', requirePermission('products'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const { jobId } = req.params;
   const job = bulkUploadJobs.get(jobId);
   if (!job) {
@@ -809,7 +812,7 @@ router.get('/bulk-upload/progress/:jobId', requireRole(['ADMIN', 'MANAGER', 'CAS
 });
 
 // Create product (CASHIER can create products)
-router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/', requirePermission('products'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   try {
     const {
       name,
@@ -902,6 +905,8 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const product = db
       .prepare('SELECT * FROM products WHERE id = ?')
       .get(result.lastInsertRowid);
+    logActivity({ userId: req.user.id, action: 'PRODUCT_CREATED', entityType: 'PRODUCT', entityId: product.id,
+      after: { name: product.name, cost_price: product.cost_price, selling_price: product.selling_price, opening_stock: product.opening_stock, status: product.status } });
     res.status(201).json(product);
   } catch (err) {
     console.error('Error creating product:', err);
@@ -910,7 +915,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 });
 
 // Update product
-router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.put('/:id', requirePermission('products'), requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   if (!existing) {
@@ -976,22 +981,27 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
   }
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+  const change = changedFields(existing, updated, ['name', 'category_id', 'unit', 'cost_price', 'selling_price', 'minimum_stock', 'status', 'mfd', 'exp']);
+  if (change) {
+    logActivity({ userId: req.user.id, action: 'PRODUCT_UPDATED', entityType: 'PRODUCT', entityId: id, details: { name: updated.name }, ...change });
+  }
   res.json(updated);
 });
 
 // Soft delete / deactivate product
-router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.delete('/:id', requirePermission('products'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
   const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   if (!existing) {
     return res.status(404).json({ message: 'Product not found' });
   }
   db.prepare('UPDATE products SET status = ? WHERE id = ?').run('INACTIVE', id);
+  logActivity({ userId: req.user.id, action: 'PRODUCT_DEACTIVATED', entityType: 'PRODUCT', entityId: id, details: { name: existing.name }, before: { status: existing.status }, after: { status: 'INACTIVE' } });
   res.json({ success: true });
 });
 
 // Bulk delete / deactivate products
-router.post('/bulk-delete', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
+router.post('/bulk-delete', requirePermission('products'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ message: 'ids must be a non-empty array' });
@@ -1010,12 +1020,13 @@ router.post('/bulk-delete', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
     console.error('Bulk delete failed', err);
     return res.status(500).json({ message: 'Bulk delete failed' });
   }
+  logActivity({ userId: req.user.id, action: 'PRODUCTS_BULK_DEACTIVATED', entityType: 'PRODUCT', details: { count: ids.length, product_ids: ids.slice(0, 500) } });
 
   res.json({ success: true, count: ids.length });
 });
 
 // Stock adjustment
-router.post('/:id/adjust-stock', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+router.post('/:id/adjust-stock', requirePermission('products'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
   const id = Number(req.params.id);
   const { quantityChange, reason } = req.body;
   if (!quantityChange || typeof quantityChange !== 'number') {
@@ -1027,8 +1038,12 @@ router.post('/:id/adjust-stock', requireRole(['ADMIN', 'MANAGER']), (req, res) =
   }
 
   // Read the current stock inside the transaction (the dialog's figure may be stale) and never go below zero
+  let stockBefore = null;
+  let stockAfter = null;
   const adjust = db.transaction(() => {
     const current = db.prepare('SELECT current_stock FROM products WHERE id = ?').get(id).current_stock;
+    stockBefore = current;
+    stockAfter = current + quantityChange;
     const newStock = current + quantityChange;
     if (newStock < 0) {
       const err = new Error(`Stock cannot go below zero (current stock is ${current})`);
@@ -1055,6 +1070,8 @@ router.post('/:id/adjust-stock', requireRole(['ADMIN', 'MANAGER']), (req, res) =
   } catch (err) {
     return res.status(err.status || 500).json({ message: err.message });
   }
+  logActivity({ userId: req.user.id, action: 'STOCK_ADJUSTED', entityType: 'PRODUCT', entityId: id,
+    details: { name: product.name, change: quantityChange, reason: reason || 'Manual adjustment' }, before: { stock: stockBefore }, after: { stock: stockAfter } });
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   res.json(updated);

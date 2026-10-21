@@ -15,6 +15,7 @@ import Users from './pages/Users';
 import Invoices from './pages/Invoices';
 import ChangePassword from './pages/ChangePassword';
 import RecoveryKey from './pages/RecoveryKey';
+import ActivityLog from './pages/ActivityLog';
 import { useEffect } from 'react';
 import { useAuthStore } from './store/authStore';
 import { api } from './api/client';
@@ -135,6 +136,7 @@ function App() {
           <Route path="expenses" element={<PermissionRoute permission="expenses"><Expenses /></PermissionRoute>} />
           <Route path="settings" element={<PermissionRoute permission="settings"><Settings /></PermissionRoute>} />
           <Route path="users" element={<PermissionRoute adminOnly><Users /></PermissionRoute>} />
+          <Route path="activity" element={<PermissionRoute permission="activity"><ActivityLog /></PermissionRoute>} />
         </Route>
       </Routes>
       <ToastContainer

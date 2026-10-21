@@ -4,6 +4,18 @@ const fs = require('fs');
 const path = require('path');
 
 let dailyJob = null;
+
+// A scheduled backup and its result go to the activity log (no user: the app did it)
+async function scheduledBackup(kind) {
+  const { logActivity } = require('./activityLog');
+  try {
+    const result = await createBackup();
+    logActivity({ action: 'BACKUP_CREATED', entityType: 'BACKUP', details: { file: result.filename, path: result.path, scheduled: kind } });
+    cleanupOldBackups();
+  } catch (err) {
+    logActivity({ action: 'BACKUP_FAILED', entityType: 'BACKUP', details: { scheduled: kind, error: err.message } });
+  }
+}
 let weeklyJob = null;
 let monthlyJob = null;
 
@@ -224,8 +236,7 @@ const updateScheduler = () => {
       
       weeklyJob = cron.schedule(cronExpression, async () => {
         console.log('📅 Weekly backup triggered');
-        await createBackup();
-        cleanupOldBackups();
+        await scheduledBackup('weekly');
       }, {
         scheduled: true,
         timezone: 'UTC'
@@ -245,8 +256,7 @@ const updateScheduler = () => {
       
       monthlyJob = cron.schedule(cronExpression, async () => {
         console.log('📅 Monthly backup triggered');
-        await createBackup();
-        cleanupOldBackups();
+        await scheduledBackup('monthly');
       }, {
         scheduled: true,
         timezone: 'UTC'
