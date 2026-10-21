@@ -66,6 +66,31 @@ function Customers() {
   const [adjustSaving, setAdjustSaving] = useState(false);
   const openAdjust = (type, amount = '') => setAdjustForm({ ...emptyAdjust, open: true, type, amount });
   const closeAdjust = () => setAdjustForm(emptyAdjust);
+  // Credit customer export (admin and manager): Excel or CSV
+  const [exportForm, setExportForm] = useState({ open: false, scope: 'owing', format: 'xlsx', invoices: true, saving: false });
+  const runExport = async () => {
+    setExportForm((f) => ({ ...f, saving: true }));
+    try {
+      const { blob, filename, rows } = await api.exportCustomers({
+        scope: exportForm.scope,
+        format: exportForm.format,
+        detail: exportForm.invoices ? 'invoices' : 'customers',
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rows} customer(s) to ${filename}`);
+      setExportForm((f) => ({ ...f, open: false, saving: false }));
+    } catch (err) {
+      toast.error(err.message);
+      setExportForm((f) => ({ ...f, saving: false }));
+    }
+  };
   const [customers, setCustomers] = useState([]);
   const [search, setSearch] = useState('');
   const [openDialog, setOpenDialog] = useState(false);
@@ -210,6 +235,11 @@ function Customers() {
         >
           Add Customer
         </Button>
+        {canAdjust && (
+          <Button variant="outlined" onClick={() => setExportForm((f) => ({ ...f, open: true }))}>
+            Export
+          </Button>
+        )}
       </Paper>
       <Paper sx={{ p: 2 }}>
         <Table size="small">
@@ -1437,6 +1467,52 @@ function Customers() {
             }}
           >
             Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Export the credit customer list */}
+      <Dialog open={exportForm.open} onClose={() => !exportForm.saving && setExportForm((f) => ({ ...f, open: false }))} fullWidth maxWidth="xs">
+        <DialogTitle>Export customers</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Which customers</InputLabel>
+            <Select label="Which customers" value={exportForm.scope} onChange={(e) => setExportForm({ ...exportForm, scope: e.target.value })}>
+              <MenuItem value="owing">Those who owe money (or are owed a refund)</MenuItem>
+              <MenuItem value="all">All active customers</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>File</InputLabel>
+            <Select label="File" value={exportForm.format} onChange={(e) => setExportForm({ ...exportForm, format: e.target.value })}>
+              <MenuItem value="xlsx">Excel (.xlsx)</MenuItem>
+              <MenuItem value="csv">CSV (.csv)</MenuItem>
+            </Select>
+          </FormControl>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Contents</InputLabel>
+            <Select
+              label="Contents"
+              value={exportForm.invoices ? 'invoices' : 'customers'}
+              onChange={(e) => setExportForm({ ...exportForm, invoices: e.target.value === 'invoices' })}
+            >
+              <MenuItem value="customers">One row per customer</MenuItem>
+              <MenuItem value="invoices">
+                {exportForm.format === 'xlsx' ? 'Customers + a sheet of unpaid invoices' : 'One row per unpaid invoice'}
+              </MenuItem>
+            </Select>
+          </FormControl>
+          <Alert severity="info" sx={{ mt: 1 }}>
+            The file has names, phone numbers, addresses and what each customer owes. Keep it private. The export is
+            recorded in the Activity Log.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExportForm((f) => ({ ...f, open: false }))} disabled={exportForm.saving}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={runExport} disabled={exportForm.saving}>
+            {exportForm.saving ? 'Exporting…' : 'Export'}
           </Button>
         </DialogActions>
       </Dialog>

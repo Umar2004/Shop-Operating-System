@@ -5,25 +5,22 @@
  * @param {string} filename - Output filename
  */
 export function exportToCSV(headers, rows, filename = 'export.csv') {
-  // Create CSV content
-  const csvContent = [
-    headers.join(','),
-    ...rows.map((row) =>
-      row
-        .map((cell) => {
-          // Escape commas and quotes in cell values
-          const cellStr = String(cell || '');
-          if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
-            return `"${cellStr.replace(/"/g, '""')}"`;
-          }
-          return cellStr;
-        })
-        .join(',')
-    ),
-  ].join('\n');
+  // Create CSV content: 0 stays 0 (only null/undefined are blank), text Excel would run as a formula
+  // (starting with = + - @) is prefixed with ' so it stays text, and commas/quotes/new lines are quoted
+  const toCell = (cell) => {
+    if (cell === null || cell === undefined) return '';
+    if (typeof cell === 'number') return String(cell);
+    let cellStr = String(cell);
+    if (/^[=+\-@\t\r]/.test(cellStr)) cellStr = `'${cellStr}`;
+    if (/[",\r\n]/.test(cellStr)) {
+      return `"${cellStr.replace(/"/g, '""')}"`;
+    }
+    return cellStr;
+  };
+  const csvContent = [headers.map(toCell).join(','), ...rows.map((row) => row.map(toCell).join(','))].join('\r\n');
 
-  // Create blob and download
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  // Create blob and download. The byte-order mark tells Excel the file is UTF-8, so non-English names show correctly
+  const blob = new Blob(['﻿', csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   const url = URL.createObjectURL(blob);
 

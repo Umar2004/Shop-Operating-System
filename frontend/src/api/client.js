@@ -144,6 +144,21 @@ export const api = {
     return request(`/audit-logs/page?${q.toString()}`);
   },
   getActivityFilters: () => request('/audit-logs/filters'),
+  // Credit customer export: returns { blob, filename }. opts: { scope: 'owing'|'all', format: 'xlsx'|'csv', detail: 'customers'|'invoices' }
+  exportCustomers: async (opts = {}) => {
+    const token = window.localStorage.getItem('sop_token');
+    const q = new URLSearchParams(opts);
+    const res = await fetch(`${API_BASE_URL}/customers/export?${q.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) useAuthStore.getState().logout();
+      throw new Error(data && data.message ? data.message : 'Failed to export customers');
+    }
+    const match = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') || '');
+    return { blob: await res.blob(), filename: match ? match[1] : 'customers', rows: Number(res.headers.get('x-export-rows') || 0) };
+  },
   getCustomerAdjustments: (customerId) =>
     request(`/customers/${customerId}/adjustments`),
   // payload: { type: 'WRITE_OFF' | 'REFUND' | 'CHARGE', amount, reason, invoiceId?, paymentType? }

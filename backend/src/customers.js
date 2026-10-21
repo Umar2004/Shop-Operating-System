@@ -16,6 +16,46 @@ const {
 
 const router = express.Router();
 
+// Download the credit customer list (Excel or CSV). Contains names, phones and debts: admin and manager only, logged.
+//   ?scope=owing|all  &format=xlsx|csv  &detail=customers|invoices (CSV: which list; Excel: invoices adds a sheet)
+//   &inactive=1 to include deactivated customers
+router.get('/export', requirePermission('customers'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+  try {
+    const { buildExport, toCsv, toXlsx, SUMMARY_COLUMNS, INVOICE_COLUMNS } = require('./customerExport');
+    const scope = req.query.scope === 'all' ? 'all' : 'owing';
+    const format = req.query.format === 'csv' ? 'csv' : 'xlsx';
+    const detail = req.query.detail === 'invoices' ? 'invoices' : 'customers';
+    const now = new Date();
+    const data = buildExport({ scope, includeInactive: req.query.inactive === '1', now });
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const base = `${scope === 'all' ? 'customers' : 'credit-customers'}-${stamp}`;
+    let body;
+    let filename;
+    if (format === 'csv') {
+      body = detail === 'invoices' ? toCsv(data.invoices, INVOICE_COLUMNS, true) : toCsv(data.summaries, SUMMARY_COLUMNS, true);
+      filename = `${base}${detail === 'invoices' ? '-unpaid-invoices' : ''}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    } else {
+      const shop = db.prepare("SELECT value FROM settings WHERE key = 'shop.name'").get();
+      body = toXlsx(data, { includeInvoices: detail === 'invoices', shopName: shop ? shop.value : '', exportedBy: req.user.username, now });
+      filename = `${base}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    }
+    logActivity({
+      userId: req.user.id,
+      action: 'CUSTOMER_EXPORT',
+      entityType: 'CUSTOMER',
+      details: { file: filename, scope, format, detail, customers: data.summaries.length, invoices: detail === 'invoices' ? data.invoices.length : undefined },
+    });
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Export-Rows', String(data.summaries.length));
+    res.send(body);
+  } catch (err) {
+    console.error('Error exporting customers:', err);
+    res.status(500).json({ message: `Failed to export customers: ${err.message}` });
+  }
+});
+
 // Get all customers (with optional search)
 router.get('/', (req, res) => {
   try {
