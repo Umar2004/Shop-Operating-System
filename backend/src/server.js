@@ -17,6 +17,7 @@ const { expenseCategoriesRouter } = require('./expenseCategories');
 const { categoriesRouter } = require('./categories');
 const { settingsRouter } = require('./settings');
 const { usersRouter } = require('./users');
+const { auditLogsRouter } = require('./auditLogs');
 const { startScheduler } = require('./backupScheduler');
 
 // Initialize database and seed defaults
@@ -191,6 +192,7 @@ app.use('/api/expense-categories', authMiddleware, expenseCategoriesRouter);
 app.use('/api/categories', authMiddleware, categoriesRouter);
 app.use('/api/settings', authMiddleware, settingsRouter);
 app.use('/api/users', authMiddleware, usersRouter);
+app.use('/api/audit-logs', authMiddleware, auditLogsRouter);
 
 // Global error handler (minimal)
 app.use((err, req, res, next) => {

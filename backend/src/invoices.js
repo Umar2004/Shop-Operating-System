@@ -4,6 +4,95 @@ const { requireRole } = require('./auth');
 
 const router = express.Router();
 
+// Money comparisons are done in whole cents so float noise (0.1 + 0.2) can't create a phantom balance.
+const toCents = (value) => Math.round((Number(value) || 0) * 100);
+
+// Validates line quantities and returns the total requested per product.
+// A product can appear on several lines, so stock must be checked against the sum, not each line.
+function requestedQuantities(items) {
+  const totals = new Map();
+  for (const item of items) {
+    const quantity = Number(item.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error('Every line needs a quantity greater than zero');
+    }
+    const productId = Number(item.productId);
+    totals.set(productId, (totals.get(productId) || 0) + quantity);
+  }
+  return totals;
+}
+
+// Line price/discount, allowing manual overrides but rejecting clearly invalid values
+function lineAmounts(item, product) {
+  const quantity = Number(item.quantity);
+  const isBlank = (v) => v === undefined || v === null || v === '';
+  const unitPrice = isBlank(item.unitPrice) ? product.selling_price : Number(item.unitPrice);
+  if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+    throw new Error(`Price for ${product.name} must be zero or more`);
+  }
+  const discountVal = isBlank(item.discount) ? 0 : Number(item.discount);
+  if (!Number.isFinite(discountVal) || discountVal < 0) {
+    throw new Error(`Discount for ${product.name} must be zero or more`);
+  }
+  const subtotal = unitPrice * quantity;
+  let itemDiscount;
+  if (item.discountType === 'percentage') {
+    if (discountVal > 100) {
+      throw new Error(`Discount for ${product.name} cannot be more than 100%`);
+    }
+    itemDiscount = (subtotal * discountVal) / 100;
+  } else {
+    if (toCents(discountVal) > toCents(subtotal)) {
+      throw new Error(`Discount for ${product.name} cannot be more than the line amount`);
+    }
+    itemDiscount = discountVal;
+  }
+  return { unitPrice, discountVal, itemDiscount, lineTotal: subtotal - itemDiscount };
+}
+
+// Invoice-level discount and additional amount must be plain non-negative numbers
+function assertInvoiceAmounts(discount, additionalAmount) {
+  for (const [label, value] of [['Discount', discount], ['Additional amount', additionalAmount]]) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) {
+      throw new Error(`${label} must be zero or more`);
+    }
+  }
+}
+
+// Audit trail (audit_logs table): one row per manual override, edit or deletion, so they can be reviewed
+function writeAudit(userId, action, invoiceId, details) {
+  db.prepare(
+    `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) VALUES (?, ?, 'INVOICE', ?, ?)`
+  ).run(userId, action, invoiceId, JSON.stringify(details));
+}
+
+function auditOverrides(userId, invoiceId, invoiceNumber, lines, invoiceDiscount, context) {
+  for (const line of lines) {
+    const base = {
+      invoice_number: invoiceNumber,
+      context,
+      product_id: line.product.id,
+      product_name: line.product.name,
+      quantity: line.quantity,
+    };
+    if (toCents(line.unitPrice) !== toCents(line.product.selling_price)) {
+      writeAudit(userId, 'PRICE_OVERRIDE', invoiceId, { ...base, list_price: line.product.selling_price, charged_price: line.unitPrice });
+    }
+    if (line.itemDiscount > 0) {
+      writeAudit(userId, 'LINE_DISCOUNT', invoiceId, {
+        ...base,
+        discount: line.discount,
+        discount_type: line.discountType,
+        discount_amount: line.itemDiscount,
+      });
+    }
+  }
+  if (Number(invoiceDiscount) > 0) {
+    writeAudit(userId, 'INVOICE_DISCOUNT', invoiceId, { invoice_number: invoiceNumber, context, amount: Number(invoiceDiscount) });
+  }
+}
+
 function getOpenSession() {
   return db
     .prepare("SELECT * FROM sessions WHERE status = 'OPEN' ORDER BY id DESC LIMIT 1")
@@ -28,6 +117,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     // Calculate totals and validate stock
     let totalAmount = 0;
     let totalCost = 0;
+    const requested = requestedQuantities(items);
 
     const detailedItems = items.map((item) => {
       const product = db
@@ -36,33 +126,25 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       if (!product) {
         throw new Error(`Product not found: ${item.productId}`);
       }
-      if (product.current_stock < item.quantity) {
+      if (product.current_stock < requested.get(product.id)) {
         throw new Error(`Insufficient stock for product: ${product.name}`);
       }
-      const unitPrice = item.unitPrice ?? product.selling_price;
-
-      // Calculate item discount
-      let itemDiscount = 0;
-      const discountVal = Number(item.discount) || 0;
-      if (item.discountType === 'percentage') {
-        itemDiscount = (unitPrice * item.quantity * discountVal) / 100;
-      } else {
-        itemDiscount = discountVal;
-      }
-
-      const lineTotal = (unitPrice * item.quantity) - itemDiscount;
+      // Price and discount may be overridden by any user; lineAmounts() rejects nonsense values
+      const { unitPrice, discountVal, itemDiscount, lineTotal } = lineAmounts(item, product);
       totalAmount += lineTotal;
       totalCost += product.cost_price * item.quantity;
       return {
         product,
         quantity: item.quantity,
         unitPrice,
-        discount: item.discount || 0,
+        discount: discountVal,
         discountType: item.discountType || 'amount',
+        itemDiscount,
         lineTotal,
       };
     });
 
+    assertInvoiceAmounts(discount, additionalAmount);
     const finalTotal = totalAmount - discount + (Number(additionalAmount) || 0);
     if (finalTotal < 0) {
       throw new Error('Discount cannot exceed total amount');
@@ -74,12 +156,44 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     const actualPaid = Array.isArray(payments)
       ? payments.filter(p => p.type !== 'CREDIT').reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
       : 0;
-    const remaining = finalTotal - allPaymentsSum;
+    const remaining = (toCents(finalTotal) - toCents(allPaymentsSum)) / 100;
+
+    // Change handed back is not money received: net it out of the cash lines before they are stored,
+    // keeping what was tendered in the payment note (amounts below are in cents)
+    const changeCents = Math.max(0, toCents(allPaymentsSum) - toCents(finalTotal));
+    const storedPayments = (Array.isArray(payments) ? payments : []).map((p) => ({
+      type: p.type,
+      amount: toCents(p.amount),
+      note: null,
+    }));
+    let changeLeft = changeCents;
+    for (let i = storedPayments.length - 1; i >= 0 && changeLeft > 0; i--) {
+      const p = storedPayments[i];
+      if (p.type !== 'CASH' || p.amount <= 0) continue;
+      const taken = Math.min(p.amount, changeLeft);
+      p.note = `Tendered ${(p.amount / 100).toFixed(2)}, change ${(taken / 100).toFixed(2)}`;
+      p.amount -= taken;
+      changeLeft -= taken;
+    }
+    if (changeLeft > 0) {
+      throw new Error('Card or credit payments are more than the invoice total. Only cash can be overpaid (change is given in cash).');
+    }
 
     // Check if any payment method is CREDIT
     const hasCreditPayment = Array.isArray(payments)
       ? payments.some((p) => p.type === 'CREDIT' && p.amount > 0)
       : false;
+
+    // An unpaid balance (part-payment or credit) must be owed by a named customer
+    if (!customerId && (remaining > 0 || hasCreditPayment)) {
+      const err = new Error(
+        remaining > 0
+          ? `A balance of ${remaining.toFixed(2)} remains. Select a customer to record it as credit, or take full payment.`
+          : 'Select a customer for a credit payment.'
+      );
+      err.code = 'CUSTOMER_REQUIRED';
+      throw err;
+    }
 
     // Check credit limit if customer exists and there's remaining balance or credit payment
     if (customerId && (remaining > 0 || hasCreditPayment)) {
@@ -101,9 +215,9 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
     if (hasCreditPayment) {
       // If any payment method is CREDIT, invoice status is CREDIT
       paymentStatus = 'CREDIT';
-    } else if (remaining > 0 && totalPaid > 0) {
+    } else if (remaining > 0 && actualPaid > 0) {
       paymentStatus = 'PARTIAL';
-    } else if (remaining > 0 && totalPaid === 0) {
+    } else if (remaining > 0) {
       paymentStatus = 'CREDIT';
     }
 
@@ -187,16 +301,20 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       insertStockMovement.run(product.id, -quantity, invoiceId);
     });
 
-    if (Array.isArray(payments) && payments.length > 0) {
+    auditOverrides(userId, invoiceId, invoiceNumber, detailedItems, discount, 'sale');
+
+    if (storedPayments.length > 0) {
       const insertPayment = db.prepare(
         `
         INSERT INTO payments
-        (invoice_id, payment_type, amount)
-        VALUES (?, ?, ?)
+        (invoice_id, payment_type, amount, note)
+        VALUES (?, ?, ?, ?)
       `
       );
-      payments.forEach((p) => {
-        insertPayment.run(invoiceId, p.type, p.amount);
+      storedPayments.forEach((p) => {
+        if (p.amount > 0) {
+          insertPayment.run(invoiceId, p.type, p.amount / 100, p.note);
+        }
       });
     }
 
@@ -249,7 +367,7 @@ router.post('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 
     res.status(201).json(result);
   } catch (err) {
-    res.status(400).json({ message: err.message || 'Failed to create invoice' });
+    res.status(400).json({ message: err.message || 'Failed to create invoice', code: err.code });
   }
 });
 
@@ -322,7 +440,7 @@ router.get('/', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
           i.discount,
           i.additional_amount,
           i.payment_status,
-          i.total_amount - i.total_cost - i.discount as profit,
+          i.total_amount - i.total_cost as profit,
           c.id as customer_id,
           c.name as customer_name,
           s.business_date
@@ -438,12 +556,16 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) =
       )
       .all(id);
 
-    // Restore stock for each item
+    // Restore stock for each item, and record it so the stock ledger stays in step with current_stock
     items.forEach((item) => {
       db.prepare('UPDATE products SET current_stock = current_stock + ? WHERE id = ?').run(
         item.quantity,
         item.product_id
       );
+      db.prepare(
+        `INSERT INTO stock_movements (product_id, type, quantity_change, reason, reference_type, reference_id)
+         VALUES (?, 'RETURN', ?, 'Invoice deleted', 'INVOICE', ?)`
+      ).run(item.product_id, item.quantity, id);
     });
 
     // Update customer balance based on invoice status and payments
@@ -469,6 +591,14 @@ router.delete('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) =
     // Delete payments first (they will be cascade deleted, but let's be explicit)
     payments.forEach((payment) => {
       db.prepare('DELETE FROM payments WHERE id = ?').run(payment.id);
+    });
+
+    writeAudit(req.user.id, 'INVOICE_DELETED', id, {
+      invoice_number: invoice.invoice_number,
+      total: invoice.total_amount,
+      payment_status: invoice.payment_status,
+      customer_id: invoice.customer_id,
+      items: items.map((i) => ({ product_id: i.product_id, product_name: i.product_name, quantity: i.quantity, unit_price: i.unit_price })),
     });
 
     // Delete invoice (cascade will delete items)
@@ -499,11 +629,10 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 
   const { items, discount = 0, additionalAmount = 0, customerId } = req.body;
 
-  // If items are provided, validate them
-  if (items !== undefined) {
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: 'At least one item is required' });
-    }
+  // The edit replaces every line, so the full item list is required
+  // (without it the old lines would be deleted and their stock restored with nothing put back)
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ message: 'At least one item is required' });
   }
 
   const tx = db.transaction(() => {
@@ -519,12 +648,16 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       )
       .all(id);
 
-    // Restore stock for old items
+    // Restore stock for old items, and record it so the stock ledger stays in step with current_stock
     oldItems.forEach((oldItem) => {
       db.prepare('UPDATE products SET current_stock = current_stock + ? WHERE id = ?').run(
         oldItem.quantity,
         oldItem.product_id
       );
+      db.prepare(
+        `INSERT INTO stock_movements (product_id, type, quantity_change, reason, reference_type, reference_id)
+         VALUES (?, 'RETURN', ?, 'Invoice edited (old lines returned)', 'INVOICE', ?)`
+      ).run(oldItem.product_id, oldItem.quantity, id);
     });
 
     // Delete old invoice items
@@ -536,28 +669,19 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
 
     // If items are provided, process new items
     if (items !== undefined) {
+      const requested = requestedQuantities(items);
       // Calculate totals and validate stock for new items
       items.forEach((item) => {
         const product = db.prepare('SELECT * FROM products WHERE id = ?').get(item.productId);
         if (!product) {
           throw new Error(`Product not found: ${item.productId}`);
         }
-        if (product.current_stock < item.quantity) {
+        if (product.current_stock < requested.get(product.id)) {
           throw new Error(`Insufficient stock for product: ${product.name}`);
         }
 
-        const unitPrice = item.unitPrice ?? product.selling_price;
-
-        // Calculate item discount
-        let itemDiscount = 0;
-        const discountVal = Number(item.discount) || 0;
-        if (item.discountType === 'percentage') {
-          itemDiscount = (unitPrice * item.quantity * discountVal) / 100;
-        } else {
-          itemDiscount = discountVal;
-        }
-
-        const lineTotal = (unitPrice * item.quantity) - itemDiscount;
+        // Price and discount may be overridden by any user; lineAmounts() rejects nonsense values
+        const { unitPrice, discountVal, itemDiscount, lineTotal } = lineAmounts(item, product);
         totalAmount += lineTotal;
         totalCost += product.cost_price * item.quantity;
 
@@ -565,8 +689,9 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
           product,
           quantity: item.quantity,
           unitPrice,
-          discount: item.discount || 0,
+          discount: discountVal,
           discountType: item.discountType || 'amount',
+          itemDiscount,
           lineTotal,
         });
       });
@@ -605,6 +730,7 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       });
     }
 
+    assertInvoiceAmounts(discount, additionalAmount);
     const finalTotal = Math.max(totalAmount - (Number(discount) || 0) + (Number(additionalAmount) || 0), 0);
 
     // Recalculate credit portion for balance adjustments
@@ -703,6 +829,15 @@ router.put('/:id', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, res) => {
       `
       )
       .all(id);
+
+    writeAudit(req.user.id, 'INVOICE_EDITED', id, {
+      invoice_number: invoice.invoice_number,
+      before: { total: invoice.total_amount, discount: invoice.discount, customer_id: invoice.customer_id,
+        items: oldItems.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount: i.discount })) },
+      after: { total: updated.total_amount, discount: updated.discount, customer_id: updated.customer_id,
+        items: updatedItems.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price, discount: i.discount })) },
+    });
+    auditOverrides(req.user.id, id, invoice.invoice_number, newItems, discount, 'edit');
 
     return { invoice: updated, items: updatedItems };
   });

@@ -84,12 +84,11 @@ router.get('/day-summary', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, r
     )
     .get();
 
-  // Calculate profit: Sales - Cost - Discount - Expenses
-  // Ensure profit is always a number, even if it's 0
+  // Calculate profit: Sales - Cost - Expenses
+  // (total_amount is already net of the invoice discount, so the discount is not subtracted again)
   const profit = Number(
     (salesRow.total_sales || 0) -
     (salesRow.total_cost || 0) -
-    (salesRow.total_discount || 0) -
     (expensesRow.total_expenses || 0)
   );
 
@@ -143,7 +142,7 @@ router.get('/sales/trends', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
         ${dateFormat} as period,
         COALESCE(SUM(i.total_amount), 0) as revenue,
         COALESCE(SUM(i.total_cost), 0) as cost,
-        COALESCE(SUM(i.total_amount - i.total_cost - i.discount), 0) as profit,
+        COALESCE(SUM(i.total_amount - i.total_cost), 0) as profit,
         COUNT(DISTINCT i.id) as transaction_count
       FROM invoices i
       JOIN sessions s ON s.id = i.session_id
@@ -264,7 +263,7 @@ router.get('/sales/summary', requireRole(['ADMIN', 'MANAGER']), (req, res) => {
         COALESCE(SUM(i.total_amount), 0) as total_sales,
         COALESCE(SUM(i.total_cost), 0) as total_cost,
         COALESCE(SUM(i.discount), 0) as total_discount,
-        COALESCE(SUM(i.total_amount - i.total_cost - i.discount), 0) as total_profit,
+        COALESCE(SUM(i.total_amount - i.total_cost), 0) as total_profit,
         COUNT(DISTINCT i.id) as transaction_count,
         COALESCE(AVG(i.total_amount), 0) as avg_transaction_value
       FROM invoices i
@@ -352,7 +351,7 @@ router.get('/sales/detail', requireRole(['ADMIN', 'MANAGER', 'CASHIER']), (req, 
         i.total_cost,
         i.discount,
         i.payment_status,
-        i.total_amount - i.total_cost - i.discount as profit,
+        i.total_amount - i.total_cost as profit,
         c.id as customer_id,
         c.name as customer_name,
         (

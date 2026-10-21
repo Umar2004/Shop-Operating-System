@@ -971,20 +971,35 @@ router.post('/:id/adjust-stock', requireRole(['ADMIN', 'MANAGER']), (req, res) =
     return res.status(404).json({ message: 'Product not found' });
   }
 
-  const newStock = product.current_stock + quantityChange;
-  db.prepare(
+  // Read the current stock inside the transaction (the dialog's figure may be stale) and never go below zero
+  const adjust = db.transaction(() => {
+    const current = db.prepare('SELECT current_stock FROM products WHERE id = ?').get(id).current_stock;
+    const newStock = current + quantityChange;
+    if (newStock < 0) {
+      const err = new Error(`Stock cannot go below zero (current stock is ${current})`);
+      err.status = 400;
+      throw err;
+    }
+    db.prepare(
+      `
+      UPDATE products SET current_stock = ? WHERE id = ?
     `
-    UPDATE products SET current_stock = ? WHERE id = ?
-  `
-  ).run(newStock, id);
+    ).run(newStock, id);
 
-  db.prepare(
+    db.prepare(
+      `
+      INSERT INTO stock_movements
+      (product_id, type, quantity_change, reason, reference_type)
+      VALUES (?, 'ADJUSTMENT', ?, ?, 'MANUAL')
     `
-    INSERT INTO stock_movements
-    (product_id, type, quantity_change, reason, reference_type)
-    VALUES (?, 'ADJUSTMENT', ?, ?, 'MANUAL')
-  `
-  ).run(id, quantityChange, reason || 'Manual adjustment');
+    ).run(id, quantityChange, reason || 'Manual adjustment');
+  });
+
+  try {
+    adjust();
+  } catch (err) {
+    return res.status(err.status || 500).json({ message: err.message });
+  }
 
   const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
   res.json(updated);

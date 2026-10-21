@@ -54,6 +54,7 @@ function Sell() {
   const [lastInvoiceNumber, setLastInvoiceNumber] = useState('');
   const [enablePrinting, setEnablePrinting] = useState(true);
   const [selectedCartItemId, setSelectedCartItemId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     api
@@ -216,6 +217,9 @@ function Sell() {
   }, [customer, remainingBalance]);
 
   const handlePay = async () => {
+    // Ignore a second click while the first sale is still being saved
+    if (submitting) return;
+    setSubmitting(true);
     try {
       // Validate: If any payment is CREDIT, customer must be selected
       const hasCreditPayment = payments.some((p) => p.type === 'CREDIT' && p.amount > 0);
@@ -252,10 +256,17 @@ function Sell() {
           toast.error('Cash payment amount cannot be zero');
           return;
         }
-        if (cashPayment.amount > 0 && cashPayment.amount < finalTotal) {
+        if (cashPayment.amount > 0 && Math.round(cashPayment.amount * 100) < Math.round(finalTotal * 100)) {
           toast.error(`Cash payment amount (${formatCurrency(cashPayment.amount)}) must be greater than or equal to the total (${formatCurrency(finalTotal)})`);
           return;
         }
+      }
+
+      // A remaining balance can only be put on credit for a named customer
+      const balanceDue = (Math.round(finalTotal * 100) - Math.round(totalPaid * 100)) / 100;
+      if (balanceDue > 0 && !customer) {
+        toast.error(`A balance of ${formatCurrency(balanceDue)} remains. Select a customer to record it as credit, or take full payment.`);
+        return;
       }
 
       const payload = {
@@ -374,6 +385,8 @@ function Sell() {
         });
     } catch (err) {
       toast.error(err.message || 'Failed to create invoice');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1148,8 +1161,9 @@ function Sell() {
               sx={{ py: 1.5, fontSize: 18, fontWeight: 600 }}
               onClick={handlePay}
               disabled={
+                submitting ||
                 cart.length === 0 ||
-                (payments.some((p) => p.type === 'CASH' && (p.amount === 0 || p.amount < finalTotal)))
+                (payments.some((p) => p.type === 'CASH' && (p.amount === 0 || Math.round(p.amount * 100) < Math.round(finalTotal * 100))))
               }
             >
               Pay {formatCurrency(finalTotal)}
