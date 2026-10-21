@@ -292,6 +292,13 @@ function runMigrations() {
     console.error('Failed to migrate payments table:', e);
   }
 
+  // Logins carry the user's token_version; moving it on ends every login of that user (see auth.js)
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
+  } catch (e) {
+    // Ignore if column already exists
+  }
+
   // The day (session) a payment was taken in, so a credit repayment counts in today's drawer
   // rather than on the day of the invoice it pays off (older rows stay NULL; see balances.sessionMoney)
   try {

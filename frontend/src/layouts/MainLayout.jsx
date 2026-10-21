@@ -346,7 +346,13 @@ function MainLayout({ window }) {
               </Typography>
               <IconButton
                 color="inherit"
-                onClick={() => {
+                onClick={async () => {
+                  // End the login on the server too; log out here even if the server can't be reached
+                  try {
+                    await api.logout();
+                  } catch (_) {
+                    // already ended or backend down
+                  }
                   logout();
                   navigate('/login');
                 }}

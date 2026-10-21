@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, endAllLogins } = require('./auth');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1038,17 +1038,31 @@ router.post('/backup/restore/:filename', requireRole(['ADMIN']), async (req, res
       }
     }
 
-    // Copy backup file to main database location
-    // Note: We don't close the database connection here as it's a singleton
-    // The connection will be re-established when the server restarts
-    fs.copyFileSync(backupPath, dbPath);
+    // Write the backup into the live database through SQLite's backup API (a locked, page-by-page copy that the
+    // open connection sees at once), instead of copying a file over a database that is still open
+    {
+      const Database = require('better-sqlite3');
+      const source = new Database(backupPath, { readonly: true, fileMustExist: true });
+      try {
+        await source.backup(dbPath);
+      } finally {
+        source.close();
+      }
+    }
+    if (db.pragma('integrity_check', { simple: true }) !== 'ok') {
+      throw new Error(`the restored database failed its integrity check; the previous one is saved as ${path.basename(currentBackupPath)}`);
+    }
+    // A backup from an older version gets this version's tables and columns, then every login ends:
+    // users and passwords are now the ones in the backup
+    require('./initDb').initDb();
+    endAllLogins();
     console.log(`[RESTORE] Database restored from: ${backupPath} to ${dbPath}`);
 
     res.json({
-      message: 'Database restored successfully. The server will need to be restarted to use the restored database.',
-      warning: 'Please restart the server/application to complete the restore',
+      message: 'Database restored successfully. Please log in again.',
       restored_from: filename,
-      restart_required: true,
+      restart_required: false,
+      logged_out: true,
     });
   } catch (err) {
     console.error('[RESTORE] Error:', err);
@@ -1121,6 +1135,7 @@ router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
 
     // Delete all data from tables (in correct order to respect foreign keys)
     const tablesToClear = [
+      'balance_adjustments',
       'stock_movements',
       'invoice_items',
       'payments',
@@ -1161,8 +1176,12 @@ router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
     }
 
     db.exec('PRAGMA foreign_keys = ON');
+    // No customers left, so no credit review pending
+    db.prepare("DELETE FROM settings WHERE key = 'credit.review_pending'").run();
+    // Nobody stays logged in to a reset system
+    endAllLogins();
 
-    res.json({ message: 'System reset successfully. All data cleared except admin user.', backup: path.basename(preResetPath) });
+    res.json({ message: 'System reset successfully. All data cleared except admin user.', backup: path.basename(preResetPath), logged_out: true });
   } catch (err) {
     console.error('Reset error:', err);
     res.status(500).json({ message: err.message || 'Failed to reset system' });

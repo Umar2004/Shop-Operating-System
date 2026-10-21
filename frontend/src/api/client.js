@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+import { useAuthStore } from '../store/authStore';
+
+const API_BASE_URL =import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
 
 async function request(path, options = {}) {
   const token = window.localStorage.getItem('sop_token');
@@ -35,14 +37,11 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
-    // Handle 401 Unauthorized - clear token and redirect to login
-    if (res.status === 401) {
-      window.localStorage.removeItem('sop_token');
-      window.localStorage.removeItem('sop_user');
-      // Redirect to login page
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
+    // 401: the login has ended (logged out elsewhere, password or role changed, reset, restore).
+    // Clearing the store sends the router back to the login screen (the app uses hash routes, so
+    // navigating to '/login' would only reload the app). A failed login attempt is not a session ending.
+    if (res.status === 401 && path !== '/auth/login') {
+      useAuthStore.getState().logout();
     }
 
     const message = data && data.message ? data.message : `Request failed with status ${res.status}`;
@@ -63,6 +62,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  // Fresh role and permissions, plus a renewed token
+  me: () => request('/auth/me'),
+  logout: () => request('/auth/logout', { method: 'POST' }),
   getCurrentSession: () => request('/sessions/current'),
   startSession: (openingCash, businessDate) =>
     request('/sessions/start', {

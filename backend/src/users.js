@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('./db');
-const { requireRole } = require('./auth');
+const { requireRole, endLogins } = require('./auth');
 
 const router = express.Router();
 
@@ -135,7 +135,7 @@ router.put('/:id', requireRole(['ADMIN']), (req, res) => {
     const userId = parseInt(req.params.id, 10);
 
     // Check if user exists
-    const existingUser = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
+    const existingUser = db.prepare('SELECT id, username, role_id, is_active FROM users WHERE id = ?').get(userId);
     if (!existingUser) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -169,6 +169,8 @@ router.put('/:id', requireRole(['ADMIN']), (req, res) => {
       }
       const passwordHash = bcrypt.hashSync(password, 10);
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
+      // A new password ends every login made with the old one
+      endLogins(userId);
     }
 
     // Update role if provided
@@ -187,6 +189,9 @@ router.put('/:id', requireRole(['ADMIN']), (req, res) => {
       }
 
       db.prepare('UPDATE users SET role_id = ? WHERE id = ?').run(role_id, userId);
+      if (Number(role_id) !== existingUser.role_id) {
+        endLogins(userId);
+      }
     }
 
     // Update active status if provided
@@ -196,6 +201,9 @@ router.put('/:id', requireRole(['ADMIN']), (req, res) => {
         return res.status(400).json({ message: 'Cannot deactivate admin user' });
       }
       db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, userId);
+      if (!is_active && existingUser.is_active) {
+        endLogins(userId);
+      }
     }
 
     // Return updated user

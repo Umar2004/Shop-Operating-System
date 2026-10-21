@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { MdWarning, MdDangerous } from 'react-icons/md';
 import { api } from '../../api/client';
+import { useAuthStore } from '../../store/authStore';
 
 function ResetSystemDialog({ open, onClose, onSuccess }) {
   const [confirmation, setConfirmation] = useState('');
@@ -35,10 +36,11 @@ function ResetSystemDialog({ open, onClose, onSuccess }) {
         onSuccess();
       }
       onClose();
-      // Show success message and reload
+      // The server has ended every login; clearing this one returns the app to the login screen
+      // (hash routes: navigating to '/login' would only reload the app, still logged in)
       setTimeout(() => {
         alert('System reset successfully. Please log in again.');
-        window.location.href = '/login';
+        useAuthStore.getState().logout();
       }, 500);
     } catch (err) {
       setError(err.message || 'Failed to reset system');

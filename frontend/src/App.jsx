@@ -13,7 +13,9 @@ import ProductCategories from './pages/ProductCategories';
 import Settings from './pages/Settings';
 import Users from './pages/Users';
 import Invoices from './pages/Invoices';
+import { useEffect } from 'react';
 import { useAuthStore } from './store/authStore';
+import { api } from './api/client';
 import './App.css';
 
 function PrivateRoute({ children }) {
@@ -52,7 +54,35 @@ function PermissionRoute({ children, permission, adminOnly }) {
   return children;
 }
 
+// While the app is open, keep the login fresh: the server sends the current role and page permissions and a
+// renewed token. A login that has ended (401) is cleared by the API client, which shows the login screen.
+function useLoginRefresh() {
+  const token = useAuthStore((s) => s.token);
+  useEffect(() => {
+    if (!token) return undefined;
+    let last = 0;
+    const refresh = () => {
+      if (Date.now() - last < 60 * 1000) return;
+      last = Date.now();
+      api
+        .me()
+        .then((res) => useAuthStore.getState().setAuth(res.token, res.user))
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    const timer = setInterval(refresh, 6 * 60 * 60 * 1000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      clearInterval(timer);
+    };
+    // only when logging in or out, not on every renewed token
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!token]);
+}
+
 function App() {
+  useLoginRefresh();
   return (
     <HashRouter>
       <Routes>

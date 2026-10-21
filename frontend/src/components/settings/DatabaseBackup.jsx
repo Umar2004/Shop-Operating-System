@@ -37,6 +37,7 @@ import {
   MdWarning,
 } from 'react-icons/md';
 import { api } from '../../api/client';
+import { useAuthStore } from '../../store/authStore';
 import BackupList from './BackupList';
 import BackupUpload from './BackupUpload';
 import ResetSystemDialog from './ResetSystemDialog';
@@ -636,10 +637,11 @@ function DatabaseBackup() {
                 setRestoring(true);
                 setError('');
                 await api.restoreBackup(restoreFilename);
-                setSuccess('Backup restored successfully. The page will reload in 2 seconds...');
+                setSuccess('Backup restored successfully. Please log in again with a user from the restored data.');
                 setRestoreDialogOpen(false);
                 setRestoreFilename('');
-                setTimeout(() => window.location.reload(), 2000);
+                // Every login has ended on the server; back to the login screen
+                setTimeout(() => useAuthStore.getState().logout(), 2000);
               } catch (err) {
                 setError(err.message || 'Failed to restore backup');
                 setRestoreDialogOpen(false);
