@@ -160,8 +160,8 @@ function Users() {
         return;
       }
 
-      if (formData.password && formData.password.length < 6) {
-        setError('Password must be at least 6 characters');
+      if (formData.password && formData.password.length < 8) {
+        setError('Password must be at least 8 characters');
         setSaving(false);
         return;
       }
@@ -462,13 +462,15 @@ function Users() {
               type="password"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              disabled={saving}
+              disabled={saving || (editingUser && editingUser.id === user?.id)}
               fullWidth
               required={!editingUser}
               helperText={
-                editingUser
-                  ? 'Leave empty to keep current password'
-                  : 'Password must be at least 6 characters'
+                editingUser && editingUser.id === user?.id
+                  ? 'To change your own password, use the key button at the top (Change my password)'
+                  : editingUser
+                    ? 'Leave empty to keep the current password. A new one is temporary: they choose their own at the next login'
+                    : 'Temporary password, at least 8 characters: they choose their own at the first login'
               }
             />
 

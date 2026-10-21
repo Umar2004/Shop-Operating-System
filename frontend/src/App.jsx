@@ -13,12 +13,40 @@ import ProductCategories from './pages/ProductCategories';
 import Settings from './pages/Settings';
 import Users from './pages/Users';
 import Invoices from './pages/Invoices';
+import ChangePassword from './pages/ChangePassword';
+import RecoveryKey from './pages/RecoveryKey';
 import { useEffect } from 'react';
 import { useAuthStore } from './store/authStore';
 import { api } from './api/client';
 import './App.css';
 
+const recoveryKeyPostponed = () => {
+  try {
+    return window.sessionStorage.getItem('sop_recovery_key_later') === '1';
+  } catch (_) {
+    return false;
+  }
+};
+
 function PrivateRoute({ children }) {
+  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
+  if (!token) {
+    return <Navigate to="/login" replace />;
+  }
+  // A temporary or factory password must be replaced before anything else
+  if (user?.mustChangePassword) {
+    return <Navigate to="/change-password" replace />;
+  }
+  // An admin without a recovery key is asked to create one (can be postponed for this session)
+  if (user?.recoveryKeyMissing && !recoveryKeyPostponed()) {
+    return <Navigate to="/recovery-key" replace />;
+  }
+  return children;
+}
+
+// Logged in, but outside the main layout (password change, recovery key)
+function LoggedInRoute({ children }) {
   const token = useAuthStore((s) => s.token);
   if (!token) {
     return <Navigate to="/login" replace />;
@@ -87,6 +115,8 @@ function App() {
     <HashRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/change-password" element={<LoggedInRoute><ChangePassword /></LoggedInRoute>} />
+        <Route path="/recovery-key" element={<LoggedInRoute><RecoveryKey /></LoggedInRoute>} />
         <Route
           path="/"
           element={

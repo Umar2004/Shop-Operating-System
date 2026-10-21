@@ -16,7 +16,7 @@ import {
 } from '@mui/material';
 import { useState, useEffect } from 'react';
 import { FaCashRegister, FaUsers, FaChartBar, FaCogs } from 'react-icons/fa';
-import { MdDashboard, MdInventory, MdLogout, MdCategory, MdChevronLeft, MdChevronRight, MdMenu, MdClose, MdPeople, MdReceipt } from 'react-icons/md';
+import { MdDashboard, MdInventory, MdLogout, MdCategory, MdChevronLeft, MdChevronRight, MdMenu, MdClose, MdPeople, MdReceipt, MdVpnKey } from 'react-icons/md';
 import { useAuthStore } from '../store/authStore';
 import ClockCalendar from '../components/ClockCalendar';
 import { api } from '../api/client';
@@ -344,6 +344,14 @@ function MainLayout({ window }) {
               <Typography variant="body2" sx={{ display: { xs: 'none', sm: 'block' } }}>
                 {user.username} ({user.role})
               </Typography>
+              <IconButton
+                color="inherit"
+                onClick={() => navigate('/change-password')}
+                aria-label="change my password"
+                title="Change my password"
+              >
+                <MdVpnKey />
+              </IconButton>
               <IconButton
                 color="inherit"
                 onClick={async () => {

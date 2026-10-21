@@ -40,8 +40,15 @@ async function request(path, options = {}) {
     // 401: the login has ended (logged out elsewhere, password or role changed, reset, restore).
     // Clearing the store sends the router back to the login screen (the app uses hash routes, so
     // navigating to '/login' would only reload the app). A failed login attempt is not a session ending.
-    if (res.status === 401 && path !== '/auth/login') {
+    if (res.status === 401 && !['/auth/login', '/auth/recover'].includes(path)) {
       useAuthStore.getState().logout();
+    }
+    // The server holds this login until a new password is chosen: show that screen
+    if (res.status === 403 && data && data.code === 'PASSWORD_CHANGE_REQUIRED') {
+      const { token: current, user } = useAuthStore.getState();
+      if (user && !user.mustChangePassword) {
+        useAuthStore.getState().setAuth(current, { ...user, mustChangePassword: true });
+      }
     }
 
     const message = data && data.message ? data.message : `Request failed with status ${res.status}`;
@@ -65,6 +72,22 @@ export const api = {
   // Fresh role and permissions, plus a renewed token
   me: () => request('/auth/me'),
   logout: () => request('/auth/logout', { method: 'POST' }),
+  changePassword: (currentPassword, newPassword) =>
+    request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  getRecoveryKeyInfo: () => request('/auth/recovery-key'),
+  createRecoveryKey: (password) =>
+    request('/auth/recovery-key', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  recoverPassword: (username, recoveryKey, newPassword) =>
+    request('/auth/recover', {
+      method: 'POST',
+      body: JSON.stringify({ username, recoveryKey, newPassword }),
+    }),
   getCurrentSession: () => request('/sessions/current'),
   startSession: (openingCash, businessDate) =>
     request('/sessions/start', {

@@ -1,7 +1,8 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const db = require('./db');
 const { requireRole, endLogins } = require('./auth');
+const { passwordProblem, hashPassword } = require('./passwords');
+const { logActivity } = require('./activityLog');
 
 const router = express.Router();
 
@@ -73,9 +74,10 @@ router.post('/', requireRole(['ADMIN']), (req, res) => {
       return res.status(400).json({ message: 'Username must be at least 3 characters' });
     }
 
-    // Validate password
-    if (typeof password !== 'string' || password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    // Validate password (a temporary one: the new user chooses their own at the first login)
+    const problem = passwordProblem(password, username.trim());
+    if (problem) {
+      return res.status(400).json({ message: problem });
     }
 
     // Check if username already exists
@@ -95,17 +97,21 @@ router.post('/', requireRole(['ADMIN']), (req, res) => {
       return res.status(400).json({ message: `Invalid role. Role ID ${roleIdNum} does not exist` });
     }
 
-    // Hash password
-    const passwordHash = bcrypt.hashSync(password, 10);
-
     // Create user
     const isActiveValue = is_active !== undefined ? (is_active ? 1 : 0) : 1;
-    
+
     const result = db
       .prepare(
-        'INSERT INTO users (username, password_hash, role_id, is_active) VALUES (?, ?, ?, ?)'
+        'INSERT INTO users (username, password_hash, role_id, is_active, must_change_password) VALUES (?, ?, ?, ?, 1)'
       )
-      .run(username.trim(), passwordHash, roleIdNum, isActiveValue);
+      .run(username.trim(), hashPassword(password), roleIdNum, isActiveValue);
+    logActivity({
+      userId: req.user.id,
+      action: 'USER_CREATED',
+      entityType: 'USER',
+      entityId: Number(result.lastInsertRowid),
+      after: { username: username.trim(), role: role.name, is_active: isActiveValue },
+    });
 
     const newUser = db
       .prepare(
@@ -128,89 +134,94 @@ router.post('/', requireRole(['ADMIN']), (req, res) => {
   }
 });
 
-// Update user
+// Update user: everything is checked first, then applied in one transaction and written to the activity log
 router.put('/:id', requireRole(['ADMIN']), (req, res) => {
   try {
     const { username, password, role_id, is_active } = req.body;
     const userId = parseInt(req.params.id, 10);
 
-    // Check if user exists
-    const existingUser = db.prepare('SELECT id, username, role_id, is_active FROM users WHERE id = ?').get(userId);
+    const existingUser = db
+      .prepare('SELECT u.id, u.username, u.role_id, u.is_active, r.name AS role_name FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?')
+      .get(userId);
     if (!existingUser) {
       return res.status(404).json({ message: 'User not found' });
     }
+    const isAdminAccount = existingUser.username === 'admin';
 
+    const newUsername = username !== undefined && username !== null ? String(username).trim() : existingUser.username;
     // Prevent changing admin username
-    if (existingUser.username === 'admin' && username !== 'admin') {
+    if (isAdminAccount && newUsername !== 'admin') {
       return res.status(400).json({ message: 'Cannot change admin username' });
     }
-
-    // Update username if provided
-    if (username !== undefined) {
-      if (username.length < 3) {
-        return res.status(400).json({ message: 'Username must be at least 3 characters' });
-      }
-
-      // Check if username is taken by another user
-      const usernameTaken = db
-        .prepare('SELECT id FROM users WHERE username = ? AND id != ?')
-        .get(username, userId);
-      if (usernameTaken) {
-        return res.status(400).json({ message: 'Username already exists' });
-      }
-
-      db.prepare('UPDATE users SET username = ? WHERE id = ?').run(username, userId);
+    if (newUsername.length < 3) {
+      return res.status(400).json({ message: 'Username must be at least 3 characters' });
+    }
+    const usernameTaken = db.prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(newUsername, userId);
+    if (usernameTaken) {
+      return res.status(400).json({ message: 'Username already exists' });
     }
 
-    // Update password if provided
-    if (password !== undefined && password.trim() !== '') {
-      if (password.length < 6) {
-        return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    // Setting someone else's password gives them a temporary one: they must choose their own at the next login
+    const settingPassword = typeof password === 'string' && password.trim() !== '';
+    if (settingPassword) {
+      if (userId === req.user.id) {
+        return res.status(400).json({ message: 'To change your own password, use "Change my password" (it asks for your current password)' });
       }
-      const passwordHash = bcrypt.hashSync(password, 10);
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
-      // A new password ends every login made with the old one
-      endLogins(userId);
+      const problem = passwordProblem(password, newUsername);
+      if (problem) {
+        return res.status(400).json({ message: problem });
+      }
     }
 
-    // Update role if provided
-    if (role_id !== undefined) {
-      const role = db.prepare('SELECT id FROM roles WHERE id = ?').get(role_id);
+    let newRole = { id: existingUser.role_id, name: existingUser.role_name };
+    if (role_id !== undefined && role_id !== null && role_id !== '') {
+      const role = db.prepare('SELECT id, name FROM roles WHERE id = ?').get(Number(role_id));
       if (!role) {
         return res.status(400).json({ message: 'Invalid role' });
       }
-
       // Prevent changing admin role
-      if (existingUser.username === 'admin') {
-        const adminRole = db.prepare('SELECT id FROM roles WHERE name = ?').get('ADMIN');
-        if (role_id !== adminRole.id) {
-          return res.status(400).json({ message: 'Cannot change admin role' });
-        }
+      if (isAdminAccount && role.name !== 'ADMIN') {
+        return res.status(400).json({ message: 'Cannot change admin role' });
       }
-
-      db.prepare('UPDATE users SET role_id = ? WHERE id = ?').run(role_id, userId);
-      if (Number(role_id) !== existingUser.role_id) {
-        endLogins(userId);
-      }
+      newRole = role;
     }
 
-    // Update active status if provided
-    if (is_active !== undefined) {
-      // Prevent deactivating admin
-      if (existingUser.username === 'admin' && !is_active) {
-        return res.status(400).json({ message: 'Cannot deactivate admin user' });
+    const newActive = is_active !== undefined ? (is_active ? 1 : 0) : existingUser.is_active;
+    // Prevent deactivating admin
+    if (isAdminAccount && !newActive) {
+      return res.status(400).json({ message: 'Cannot deactivate admin user' });
+    }
+
+    db.transaction(() => {
+      db.prepare('UPDATE users SET username = ?, role_id = ?, is_active = ? WHERE id = ?').run(newUsername, newRole.id, newActive, userId);
+      if (settingPassword) {
+        db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(hashPassword(password), userId);
       }
-      db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, userId);
-      if (!is_active && existingUser.is_active) {
+      // A new password, a new role or deactivation ends every login of that user at once
+      if (settingPassword || newRole.id !== existingUser.role_id || (!newActive && existingUser.is_active)) {
         endLogins(userId);
       }
-    }
+
+      const log = (action, extra) => logActivity({ userId: req.user.id, action, entityType: 'USER', entityId: userId, ...extra });
+      if (newUsername !== existingUser.username) {
+        log('USER_RENAMED', { before: { username: existingUser.username }, after: { username: newUsername } });
+      }
+      if (newRole.id !== existingUser.role_id) {
+        log('ROLE_CHANGED', { details: { username: newUsername }, before: { role: existingUser.role_name }, after: { role: newRole.name } });
+      }
+      if (newActive !== existingUser.is_active) {
+        log(newActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', { details: { username: newUsername } });
+      }
+      if (settingPassword) {
+        log('PASSWORD_RESET_BY_ADMIN', { details: { username: newUsername, must_change_at_next_login: true } });
+      }
+    })();
 
     // Return updated user
     const updatedUser = db
       .prepare(
         `
-      SELECT u.id, u.username, u.is_active, u.created_at, r.id as role_id, r.name as role_name, r.description as role_description
+      SELECT u.id, u.username, u.is_active, u.created_at, u.must_change_password, r.id as role_id, r.name as role_name, r.description as role_description
       FROM users u
       JOIN roles r ON r.id = u.role_id
       WHERE u.id = ?
@@ -240,8 +251,22 @@ router.delete('/:id', requireRole(['ADMIN']), (req, res) => {
       return res.status(400).json({ message: 'Cannot delete admin user' });
     }
 
-    // Delete user
-    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    // A user who has ever logged in, sold, opened a day or recorded anything stays on record (their name is on
+    // that history): the database refuses the delete, and they can be deactivated instead
+    try {
+      db.transaction(() => {
+        db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+        logActivity({ userId: req.user.id, action: 'USER_DELETED', entityType: 'USER', entityId: userId, before: { username: user.username } });
+      })();
+    } catch (err) {
+      if (err.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+        return res.status(409).json({
+          code: 'USER_HAS_HISTORY',
+          message: `${user.username} has history in the shop records, so they can't be deleted. Deactivate them instead: they won't be able to log in.`,
+        });
+      }
+      throw err;
+    }
 
     res.json({ message: 'User deleted successfully' });
   } catch (err) {
@@ -289,29 +314,45 @@ router.put('/:id/permissions', requireRole(['ADMIN']), (req, res) => {
     const { permissions } = req.body;
 
     // Check if user exists
-    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+    const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(userId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+    const current = () =>
+      db
+        .prepare('SELECT permission_key FROM user_permissions WHERE user_id = ? ORDER BY permission_key')
+        .all(userId)
+        .map((p) => p.permission_key);
+    const before = current();
 
-    // Delete existing permissions
-    db.prepare('DELETE FROM user_permissions WHERE user_id = ?').run(userId);
+    db.transaction(() => {
+      // Delete existing permissions
+      db.prepare('DELETE FROM user_permissions WHERE user_id = ?').run(userId);
 
-    // Add new permissions
-    if (permissions && Array.isArray(permissions) && permissions.length > 0) {
-      const insertPermission = db.prepare(
-        'INSERT INTO user_permissions (user_id, permission_key) VALUES (?, ?)'
-      );
-      permissions.forEach((permission) => {
-        insertPermission.run(userId, permission);
-      });
-    }
+      // Add new permissions
+      if (permissions && Array.isArray(permissions) && permissions.length > 0) {
+        const insertPermission = db.prepare(
+          'INSERT OR IGNORE INTO user_permissions (user_id, permission_key) VALUES (?, ?)'
+        );
+        permissions.forEach((permission) => {
+          insertPermission.run(userId, permission);
+        });
+      }
+    })();
 
     // Return updated permissions
-    const updatedPermissions = db
-      .prepare('SELECT permission_key FROM user_permissions WHERE user_id = ?')
-      .all(userId)
-      .map((p) => p.permission_key);
+    const updatedPermissions = current();
+    if (before.join(',') !== updatedPermissions.join(',')) {
+      logActivity({
+        userId: req.user.id,
+        action: 'PERMISSIONS_CHANGED',
+        entityType: 'USER',
+        entityId: userId,
+        details: { username: user.username },
+        before: { pages: before },
+        after: { pages: updatedPermissions },
+      });
+    }
 
     res.json(updatedPermissions);
   } catch (err) {

@@ -1178,8 +1178,15 @@ router.post('/reset', requireRole(['ADMIN']), async (req, res) => {
     db.exec('PRAGMA foreign_keys = ON');
     // No customers left, so no credit review pending
     db.prepare("DELETE FROM settings WHERE key = 'credit.review_pending'").run();
-    // Nobody stays logged in to a reset system
+    // Nobody stays logged in to a reset system; an admin on the factory password must change it
     endAllLogins();
+    require('./passwords').flagDefaultPasswords();
+    require('./activityLog').logActivity({
+      userId: req.user.id,
+      action: 'SYSTEM_RESET',
+      entityType: 'SYSTEM',
+      details: { cleared: tablesToClear, pre_reset_backup: path.basename(preResetPath) },
+    });
 
     res.json({ message: 'System reset successfully. All data cleared except admin user.', backup: path.basename(preResetPath), logged_out: true });
   } catch (err) {

@@ -299,6 +299,21 @@ function runMigrations() {
     // Ignore if column already exists
   }
 
+  // Passwords: a user flagged here must set a new password before doing anything else (see auth.js)
+  try {
+    db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
+  } catch (e) {
+    // Ignore if column already exists
+  }
+  // The recovery key (only its hash): lets the admin set a new password without the old one
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_recovery (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      key_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      created_by INTEGER
+    );
+  `);
   // The day (session) a payment was taken in, so a credit repayment counts in today's drawer
   // rather than on the day of the invoice it pays off (older rows stay NULL; see balances.sessionMoney)
   try {
@@ -420,6 +435,12 @@ function seedDefaults() {
 function initDb() {
   runMigrations();
   seedDefaults();
+  // Anyone still on the factory password must change it at the next login (includes a freshly seeded admin)
+  try {
+    require('./passwords').flagDefaultPasswords();
+  } catch (e) {
+    console.error('Failed to check for default passwords:', e);
+  }
 }
 
 module.exports = {

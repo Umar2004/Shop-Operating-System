@@ -5,9 +5,12 @@ import DatabaseBackup from '../components/settings/DatabaseBackup';
 import ShopInfo from '../components/settings/ShopInfo';
 import PrinterSettings from '../components/settings/PrinterSettings';
 import ReceiptCustomization from '../components/settings/ReceiptCustomization';
+import SecuritySettings from '../components/settings/SecuritySettings';
+import { useAuthStore } from '../store/authStore';
 
 function Settings() {
   const [activeTab, setActiveTab] = useState(0);
+  const isAdmin = useAuthStore((s) => s.user?.role === 'ADMIN');
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -22,6 +25,7 @@ function Settings() {
           <Tab label="Shop Info" />
           <Tab label="Printer" />
           <Tab label="Receipt Customization" />
+          {isAdmin && <Tab label="Security" />}
         </Tabs>
       </Paper>
 
@@ -30,6 +34,7 @@ function Settings() {
       {activeTab === 2 && <ShopInfo />}
       {activeTab === 3 && <PrinterSettings />}
       {activeTab === 4 && <ReceiptCustomization />}
+      {activeTab === 5 && isAdmin && <SecuritySettings />}
     </Box>
   );
 }
