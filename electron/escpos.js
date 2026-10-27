@@ -29,6 +29,7 @@ class ESCPOSBuilder {
   align(a)          { return this._b(ESC, 0x61, a === 'center' ? 1 : a === 'right' ? 2 : 0); }
   bold(on)          { return this._b(ESC, 0x45, on ? 1 : 0); }
   doubleHeight(on)  { return this._b(GS, 0x21, on ? 0x01 : 0x00); }
+  smallFont(on)     { return this._b(ESC, 0x4D, on ? 1 : 0); } // Font B
 
   line(str = '')    { return this._s(this._indent + str + '\n'); }
   sep(ch = '-')     { return this._s(this._indent + ch.repeat(this.cols) + '\n'); }
@@ -73,15 +74,15 @@ function parseSettings(s) {
 
 // ─── Logo → ESC/POS raster bitmap ────────────────────────────────────────────
 // Converts a PNG/JPG Buffer to GS v 0 ESC/POS bytes, centered on the paper.
-// Logo is scaled to ~50% of paper width.
-async function logoToEscpos(imageBuffer, paperSize) {
+// Logo is scaled to ~50% of paper width, or to targetDots wide when given.
+async function logoToEscpos(imageBuffer, paperSize, targetDots) {
   const Jimp = require('jimp');
 
   const paperDots  = DOT_WIDTH[String(paperSize)] || 576;
   const paperBytes = paperDots / 8; // full paper row width in bytes
 
   // Target ~50% of paper width for a clean logo
-  const targetWidth = Math.floor(paperDots * 0.5);
+  const targetWidth = targetDots || Math.floor(paperDots * 0.5);
 
   const img = await Jimp.read(imageBuffer);
 
@@ -128,7 +129,14 @@ async function logoToEscpos(imageBuffer, paperSize) {
 
 // ─── Receipt generators ───────────────────────────────────────────────────────
 
-function generateTest(shopName, paperSize, receiptSettings, logoBuffer) {
+// Last lines of every receipt: the small Vexora mark (when converted) and "Powered by Vexora Labs" in the small font
+function poweredBy(b, footerMark) {
+  b.align('center');
+  if (footerMark) b.raw(footerMark);
+  return b.smallFont(true).line('Powered by Vexora Labs').smallFont(false);
+}
+
+function generateTest(shopName, paperSize, receiptSettings, logoBuffer, footerMark) {
   const cfg = parseSettings(receiptSettings);
   const b = new ESCPOSBuilder(paperSize, cfg.paddingLeft);
   b.init();
@@ -141,12 +149,12 @@ function generateTest(shopName, paperSize, receiptSettings, logoBuffer) {
    .sep()
    .line('Printing is working correctly.')
    .line('Paper width: ' + paperSize + 'mm')
-   .sep()
-   .feed(3).cut();
+   .sep();
+  poweredBy(b, footerMark).feed(3).cut();
   return b.encode();
 }
 
-function generateInvoice(fullInvoice, shopName, paperSize, receiptSettings, logoBuffer) {
+function generateInvoice(fullInvoice, shopName, paperSize, receiptSettings, logoBuffer, footerMark) {
   const cfg = parseSettings(receiptSettings);
   const b = new ESCPOSBuilder(paperSize, cfg.paddingLeft);
 
@@ -197,13 +205,13 @@ function generateInvoice(fullInvoice, shopName, paperSize, receiptSettings, logo
   if (pmtTypes) b.align('left').line(`Method: ${pmtTypes}`);
 
   // Footer
-  b.sep().align(cfg.footerAlign).line('Thank you for your business!')
-   .feed(3).cut();
+  b.sep().align(cfg.footerAlign).line('Thank you for your business!');
+  poweredBy(b, footerMark).feed(3).cut();
 
   return b.encode();
 }
 
-function generatePaymentReceipt(receipt, shopName, paperSize, receiptSettings, logoBuffer) {
+function generatePaymentReceipt(receipt, shopName, paperSize, receiptSettings, logoBuffer, footerMark) {
   const cfg = parseSettings(receiptSettings);
   const b = new ESCPOSBuilder(paperSize, cfg.paddingLeft);
 
@@ -229,8 +237,8 @@ function generatePaymentReceipt(receipt, shopName, paperSize, receiptSettings, l
   if (receipt.balanceBefore !== undefined) b.twoCol('Balance Before:', fmt(receipt.balanceBefore));
   if (receipt.balanceAfter  !== undefined) b.twoCol('Balance After:',  fmt(receipt.balanceAfter));
 
-  b.sep().align(cfg.footerAlign).line('Thank you!')
-   .feed(3).cut();
+  b.sep().align(cfg.footerAlign).line('Thank you!');
+  poweredBy(b, footerMark).feed(3).cut();
 
   return b.encode();
 }

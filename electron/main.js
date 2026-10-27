@@ -298,6 +298,20 @@ ipcMain.handle('printer:print', async (event, options) => {
   }
 });
 
+// The small Vexora mark above "Powered by Vexora Labs" at the end of each receipt (converted once per paper size)
+const footerMarks = {};
+async function receiptFooterMark(escpos, paperSize) {
+  if (!(paperSize in footerMarks)) {
+    try {
+      footerMarks[paperSize] = await escpos.logoToEscpos(fs.readFileSync(path.join(__dirname, 'assets', 'vexora-swirl.png')), paperSize, 48);
+    } catch (e) {
+      log('PRINTER', `Receipt footer mark conversion failed: ${e.message}`, true); // the text line still prints
+      footerMarks[paperSize] = null;
+    }
+  }
+  return footerMarks[paperSize];
+}
+
 ipcMain.handle('printer:printDirect', async (event, options) => {
   const { type, printerName, paperSize, invoice, receipt, shopName, receiptSettings, printLogo, usbDeviceId } = options;
 
@@ -326,13 +340,14 @@ ipcMain.handle('printer:printDirect', async (event, options) => {
     }
   }
 
+  const footerMark = await receiptFooterMark(escpos, paperSize || '80');
   let buffer;
   if (type === 'test') {
-    buffer = escpos.generateTest(shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer);
+    buffer = escpos.generateTest(shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer, footerMark);
   } else if (type === 'receipt') {
-    buffer = escpos.generatePaymentReceipt(receipt, shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer);
+    buffer = escpos.generatePaymentReceipt(receipt, shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer, footerMark);
   } else {
-    buffer = escpos.generateInvoice(invoice, shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer);
+    buffer = escpos.generateInvoice(invoice, shopName || 'Shop', paperSize || '80', receiptSettings, logoBuffer, footerMark);
   }
 
   return await sendRawToPrinter(usbDeviceId || null, buffer);

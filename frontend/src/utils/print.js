@@ -1,7 +1,15 @@
 /**
  * Print utility functions for generating HTML receipts and invoices
  */
-import { PRODUCT_NAME } from '../config/brand';
+import { PRODUCT_NAME, VENDOR_NAME } from '../config/brand';
+import receiptMark from '../assets/vexora-mark-receipt.png?inline';
+
+// Last line of every printed receipt: the Vexora mark and "Powered by Vexora Labs". Inline styles and an inlined
+// (data:) image, because the receipt HTML is printed from a temp file that can't reach the app's assets.
+const poweredByHTML = () =>
+  '<div style="margin-top: 8px; text-align: center; font-size: 10px; line-height: 14px; color: #000;">' +
+  `<img src="${receiptMark}" alt="" style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;" />` +
+  `<span style="vertical-align: middle;">Powered by ${VENDOR_NAME}</span></div>`;
 
 /**
  * Generate HTML for test receipt
@@ -104,6 +112,7 @@ export function generateTestReceiptHTML(settings) {
   </div>
   <div class="separator">--------------------</div>
   <div class="footer">${dateTime}</div>
+  ${poweredByHTML()}
 </body>
 </html>
   `.trim();
@@ -339,6 +348,7 @@ export function generateInvoiceHTML(invoiceData, settings) {
   </div>
   <div class="separator">--------------------</div>
   <div class="footer">Thank you for your business!</div>
+  ${poweredByHTML()}
 </body>
 </html>
   `.trim();
@@ -507,6 +517,7 @@ export function generateReceiptHTML(receiptData, settings) {
   </div>
   <div class="separator">--------------------</div>
   <div class="footer">Thank you for your payment!</div>
+  ${poweredByHTML()}
 </body>
 </html>
   `.trim();
