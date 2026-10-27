@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   Box,
   Button,
@@ -15,7 +15,6 @@ import {
   TextField,
   Typography,
   Chip,
-  IconButton,
   Grid,
   Checkbox,
   Toolbar,
@@ -25,11 +24,11 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { Download } from '@mui/icons-material';
-import { MdEdit, MdInventory } from 'react-icons/md';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { getInputStep } from '../utils/numberFormat';
 import ProductFormDialog from '../components/products/ProductFormDialog';
+import ProductTable from '../components/products/ProductTable';
 import { useConfirmDialog } from '../utils/confirmDialog';
 
 function Products() {
@@ -93,6 +92,24 @@ function Products() {
 
     return () => clearTimeout(timeoutId);
   }, [search]);
+
+  // Stable callbacks and a Set of selected ids, so the memoized table rows re-render only when their own
+  // product or selection changes
+  const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const toggleOne = useCallback((id, checked) => {
+    setSelectedIds((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)));
+  }, []);
+  const toggleAll = useCallback((checked) => {
+    setSelectedIds(checked ? products.map((p) => p.id) : []);
+  }, [products]);
+  const openEdit = useCallback((p) => {
+    setProductDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }));
+  }, []);
+  const openAdjust = useCallback((p) => {
+    setStockAdjustProduct(p);
+    setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
+    setStockAdjustDialog(true);
+  }, []);
 
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -692,99 +709,14 @@ function Products() {
           </Table>
         </Paper>
       )}
-      <Paper sx={{ p: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell padding="checkbox">
-                <Checkbox
-                  checked={
-                    products.length > 0 && selectedIds.length === products.length
-                  }
-                  indeterminate={
-                    selectedIds.length > 0 &&
-                    selectedIds.length < products.length
-                  }
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedIds(products.map((p) => p.id));
-                    } else {
-                      setSelectedIds([]);
-                    }
-                  }}
-                />
-              </TableCell>
-              <TableCell>Product ID</TableCell>
-              <TableCell>Name</TableCell>
-              <TableCell>Category</TableCell>
-              <TableCell>Unit</TableCell>
-              <TableCell>Cost</TableCell>
-              <TableCell>Price</TableCell>
-              <TableCell>Stock</TableCell>
-              <TableCell>Min Stock</TableCell>
-              <TableCell>MFD</TableCell>
-              <TableCell>EXP</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="center">Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {products.map((p) => (
-              <TableRow key={p.id}>
-                <TableCell padding="checkbox">
-                  <Checkbox
-                    checked={selectedIds.includes(p.id)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedIds((prev) => [...prev, p.id]);
-                      } else {
-                        setSelectedIds((prev) => prev.filter((id) => id !== p.id));
-                      }
-                    }}
-                  />
-                </TableCell>
-                <TableCell>{p.product_code || `PORD-${String(p.id).padStart(5, '0')}`}</TableCell>
-                <TableCell>{p.name}</TableCell>
-                <TableCell>{p.category_name || '-'}</TableCell>
-                <TableCell>{p.unit}</TableCell>
-                <TableCell>{p.cost_price.toFixed(2)}</TableCell>
-                <TableCell>{p.selling_price.toFixed(2)}</TableCell>
-                <TableCell>{p.current_stock}</TableCell>
-                <TableCell>{p.minimum_stock}</TableCell>
-                <TableCell>{p.mfd || '-'}</TableCell>
-                <TableCell>{p.exp || '-'}</TableCell>
-                <TableCell>{p.status}</TableCell>
-                <TableCell align="center">
-                  <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
-                    <Tooltip title="Edit Product">
-                      <IconButton
-                        size="small"
-                        color="primary"
-                        onClick={() => setProductDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }))}
-                      >
-                        <MdEdit size={18} />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Adjust Stock">
-                      <IconButton
-                        size="small"
-                        color="secondary"
-                        onClick={() => {
-                          setStockAdjustProduct(p);
-                          setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
-                          setStockAdjustDialog(true);
-                        }}
-                      >
-                        <MdInventory size={18} />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Paper>
+      <ProductTable
+        products={products}
+        selected={selected}
+        onToggle={toggleOne}
+        onToggleAll={toggleAll}
+        onEdit={openEdit}
+        onAdjust={openAdjust}
+      />
 
       <ProductFormDialog
         key={productDialog.seq}
