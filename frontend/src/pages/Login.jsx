@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import RecoveryKeyCard from '../components/RecoveryKeyCard';
+import PasswordField from '../components/PasswordField';
 
 function Login() {
   const [username, setUsername] = useState('');
@@ -107,11 +108,10 @@ function Login() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
             />
-            <TextField
+            <PasswordField
               fullWidth
               label="Password"
               margin="normal"
-              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
@@ -153,7 +153,7 @@ function Login() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 if (recover.next !== recover.confirm) {
-                  setRecover({ ...recover, error: 'The two new passwords are not the same' });
+                  setRecover({ ...recover, error: "Passwords don't match" });
                   return;
                 }
                 setRecover({ ...recover, saving: true, error: '' });
@@ -175,10 +175,11 @@ function Login() {
                 onChange={(e) => setRecover({ ...recover, username: e.target.value })} />
               <TextField fullWidth margin="dense" label="Recovery key" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" value={recover.key}
                 onChange={(e) => setRecover({ ...recover, key: e.target.value })} inputProps={{ style: { fontFamily: 'monospace', textTransform: 'uppercase' } }} />
-              <TextField fullWidth margin="dense" type="password" label="New password" helperText="At least 8 characters" value={recover.next}
-                onChange={(e) => setRecover({ ...recover, next: e.target.value })} />
-              <TextField fullWidth margin="dense" type="password" label="New password again" value={recover.confirm}
-                onChange={(e) => setRecover({ ...recover, confirm: e.target.value })} />
+              <PasswordField fullWidth margin="dense" label="New password" helperText="At least 8 characters" value={recover.next}
+                autoComplete="new-password" onChange={(e) => setRecover({ ...recover, next: e.target.value })} />
+              <PasswordField fullWidth margin="dense" label="Confirm new password" value={recover.confirm}
+                autoComplete="new-password" onChange={(e) => setRecover({ ...recover, confirm: e.target.value })}
+                confirms={recover.next} />
               {recover.error && (
                 <Alert severity="error" sx={{ mt: 1 }}>
                   {recover.error}
@@ -190,7 +191,7 @@ function Login() {
               </Typography>
               <DialogActions sx={{ px: 0 }}>
                 <Button onClick={() => setRecover({ ...recover, open: false })}>Cancel</Button>
-                <Button type="submit" variant="contained" disabled={recover.saving || !recover.username || !recover.key || !recover.next}>
+                <Button type="submit" variant="contained" disabled={recover.saving || !recover.username || !recover.key || !recover.next || recover.next !== recover.confirm}>
                   {recover.saving ? 'Checking…' : 'Set new password'}
                 </Button>
               </DialogActions>

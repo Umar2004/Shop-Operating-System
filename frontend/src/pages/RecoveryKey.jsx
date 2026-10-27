@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import RecoveryKeyCard from '../components/RecoveryKeyCard';
+import PasswordField from '../components/PasswordField';
 
 // Admin: create the recovery key (first setup, or a new one from Settings > Security).
 // The key is shown once; creating a new one makes the old one useless.
@@ -72,10 +73,9 @@ function RecoveryKey() {
                   The key you wrote down before will stop working.
                 </Alert>
               )}
-              <TextField
+              <PasswordField
                 fullWidth
                 margin="normal"
-                type="password"
                 label="Your password (to confirm it is you)"
                 autoComplete="current-password"
                 value={password}

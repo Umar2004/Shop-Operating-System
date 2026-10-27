@@ -40,6 +40,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { useConfirmDialog } from '../utils/confirmDialog';
 import { useAuthStore } from '../store/authStore';
+import PasswordField from '../components/PasswordField';
 
 function Users() {
   const navigate = useNavigate();
@@ -57,11 +58,11 @@ function Users() {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
+    confirmPassword: '',
     role_id: '',
     is_active: true,
   });
   const [saving, setSaving] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     // Check if user is ADMIN
@@ -97,10 +98,10 @@ function Users() {
       setFormData({
         username: user.username,
         password: '',
+        confirmPassword: '',
         role_id: user.role_id,
         is_active: user.is_active === 1 || user.is_active === true,
       });
-      setShowPassword(false);
       
       // Load user permissions
       try {
@@ -119,10 +120,10 @@ function Users() {
       setFormData({
         username: '',
         password: '',
+        confirmPassword: '',
         role_id: roles.length > 0 ? roles[0].id : '',
         is_active: true,
       });
-      setShowPassword(true);
       setUserPermissions(['dashboard']); // Default to dashboard only
     }
     setDialogOpen(true);
@@ -134,6 +135,7 @@ function Users() {
     setFormData({
       username: '',
       password: '',
+      confirmPassword: '',
       role_id: '',
       is_active: true,
     });
@@ -162,6 +164,12 @@ function Users() {
 
       if (formData.password && formData.password.length < 8) {
         setError('Password must be at least 8 characters');
+        setSaving(false);
+        return;
+      }
+
+      if (formData.password && formData.password !== formData.confirmPassword) {
+        setError("Passwords don't match");
         setSaving(false);
         return;
       }
@@ -462,9 +470,9 @@ function Users() {
               helperText={editingUser?.username === 'admin' ? 'Admin username cannot be changed' : ''}
             />
 
-            <TextField
+            <PasswordField
               label="Password"
-              type="password"
+              autoComplete="new-password"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               disabled={saving || (editingUser && editingUser.id === user?.id)}
@@ -478,6 +486,19 @@ function Users() {
                     : 'Temporary password, at least 8 characters: they choose their own at the first login'
               }
             />
+
+            {(!editingUser || formData.password) && (
+              <PasswordField
+                label="Confirm password"
+                autoComplete="new-password"
+                value={formData.confirmPassword}
+                onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                disabled={saving}
+                fullWidth
+                required
+                confirms={formData.password}
+              />
+            )}
 
             <FormControl fullWidth required>
               <InputLabel>Role</InputLabel>
@@ -601,7 +622,7 @@ function Users() {
           <Button
             onClick={handleSave}
             variant="contained"
-            disabled={saving || !formData.username.trim() || !formData.role_id || (!editingUser && !formData.password.trim())}
+            disabled={saving || !formData.username.trim() || !formData.role_id || (!editingUser && !formData.password.trim()) || (!!formData.password && formData.password !== formData.confirmPassword)}
             startIcon={saving ? <CircularProgress size={16} /> : null}
           >
             {saving ? 'Saving...' : editingUser ? 'Update' : 'Create'}

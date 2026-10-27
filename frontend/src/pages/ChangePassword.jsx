@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Typography } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
+import PasswordField from '../components/PasswordField';
 
 // Change my password. Also the screen a user is held on when they must choose a new password
 // (factory password, or a temporary one set by the admin).
@@ -25,7 +26,7 @@ function ChangePassword() {
       return;
     }
     if (form.next !== form.confirm) {
-      setError('The two new passwords are not the same');
+      setError("Passwords don't match");
       return;
     }
     setSaving(true);
@@ -54,33 +55,31 @@ function ChangePassword() {
             </Alert>
           )}
           <Box component="form" onSubmit={submit}>
-            <TextField
+            <PasswordField
               fullWidth
               margin="normal"
-              type="password"
               label="Current password"
               autoComplete="current-password"
               value={form.current}
               onChange={(e) => setForm({ ...form, current: e.target.value })}
             />
-            <TextField
+            <PasswordField
               fullWidth
               margin="normal"
-              type="password"
               label="New password"
               autoComplete="new-password"
               helperText="At least 8 characters; not your username"
               value={form.next}
               onChange={(e) => setForm({ ...form, next: e.target.value })}
             />
-            <TextField
+            <PasswordField
               fullWidth
               margin="normal"
-              type="password"
-              label="New password again"
+              label="Confirm new password"
               autoComplete="new-password"
               value={form.confirm}
               onChange={(e) => setForm({ ...form, confirm: e.target.value })}
+              confirms={form.next}
             />
             {error && (
               <Alert severity="error" sx={{ mt: 1 }}>
@@ -104,7 +103,7 @@ function ChangePassword() {
               ) : (
                 <Button onClick={() => navigate(-1)}>Cancel</Button>
               )}
-              <Button type="submit" variant="contained" disabled={saving || !form.current || !form.next || !form.confirm}>
+              <Button type="submit" variant="contained" disabled={saving || !form.current || !form.next || form.next !== form.confirm}>
                 {saving ? 'Saving…' : 'Change password'}
               </Button>
             </Box>
