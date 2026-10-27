@@ -11,6 +11,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { PRODUCT_NAME } = require('../src/brand');
+const { installedDataDir, DB_FILE } = require('../src/appData');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 
@@ -24,12 +25,10 @@ const fail = (message) => {
   process.exit(1);
 };
 
-// Same place as the app (backend/src/db.js)
+// Same place as the installed app: DATA_DIR if set (that is how the app tells its backend), else Electron's
+// userData\data, %APPDATA%\sos\data (backend/src/appData.js)
 function defaultDbPath() {
-  if (process.env.DATA_DIR) return path.join(process.env.DATA_DIR, 'sop.db');
-  return process.platform === 'win32'
-    ? path.join(os.homedir(), 'AppData', 'Roaming', 'SOP', 'data', 'sop.db')
-    : path.join(os.homedir(), '.config', 'SOP', 'data', 'sop.db');
+  return path.join(process.env.DATA_DIR || installedDataDir(), DB_FILE);
 }
 
 const appAnswers = () =>
