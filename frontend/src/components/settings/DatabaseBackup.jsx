@@ -40,6 +40,7 @@ import { api } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import BackupList from './BackupList';
 import CloudBackup from './CloudBackup';
+import BackupLocationWarning from '../BackupLocationWarning';
 import BackupUpload from './BackupUpload';
 import ResetSystemDialog from './ResetSystemDialog';
 
@@ -79,6 +80,9 @@ function DatabaseBackup() {
   
   // Backup path state
   const [backupPath, setBackupPath] = useState('');
+  // Where backups really go (the set folder, or this PC's default folder when the set one can't be used)
+  const [location, setLocation] = useState(null);
+  const loadLocation = () => api.getBackupLocation().then(setLocation).catch(() => setLocation(null));
   const [savingPath, setSavingPath] = useState(false);
   const [pathValidating, setPathValidating] = useState(false);
   const fileInputRef = useRef(null);
@@ -100,6 +104,7 @@ function DatabaseBackup() {
       const settings = await api.getSettings();
       const savedPath = settings['backup.path'] || '';
       setBackupPath(savedPath);
+      loadLocation();
       
       if (savedPath) {
       }
@@ -136,6 +141,7 @@ function DatabaseBackup() {
       setError('');
       setSuccess('');
       const result = await api.createBackup();
+      loadLocation();
       const pathInfo = result.path || result.directory ? `\nSaved to: ${result.path || result.directory}` : '';
       setSuccess(`Backup created successfully: ${result.filename}${pathInfo}`);
       setTimeout(() => {
@@ -234,6 +240,7 @@ function DatabaseBackup() {
       
       // Update local state with the saved path
       setBackupPath(pathToSaveFinal);
+      loadLocation();
       setSuccess(`Backup path saved successfully: ${pathToSaveFinal}`);
       setTimeout(() => setSuccess(''), 4000);
     } catch (err) {
@@ -488,16 +495,19 @@ function DatabaseBackup() {
           <MdFolder />
           <Typography variant="h6">Backup Storage Path</Typography>
         </Box>
-        {backupPath && (
+        <BackupLocationWarning location={location} sx={{ mb: 2 }} />
+        {location && !location.fallback && (
           <Alert severity="info" sx={{ mb: 2 }}>
             <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
               Current Backup Location:
             </Typography>
             <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>
-              {backupPath}
+              {location.actual}
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-              All backups will be saved to this location. Make sure this path is accessible and has enough storage space.
+              {location.configured
+                ? 'All backups will be saved to this location. Make sure this path is accessible and has enough storage space.'
+                : "No backup folder is set, so backups are saved on this PC. Set one below (e.g. an external drive) to keep them off this PC's disk."}
             </Typography>
           </Alert>
         )}

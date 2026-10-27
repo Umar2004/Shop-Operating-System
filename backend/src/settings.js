@@ -57,37 +57,10 @@ if (!uploadsBaseDir) {
 const uploadsDir = path.join(uploadsBaseDir, 'logo');
 const defaultBackupsDir = path.join(dataDir, 'backups');
 
-// Helper function to get backup directory from settings or use default
-const getBackupDir = () => {
-  try {
-    const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('backup.path');
-    if (setting && setting.value && setting.value.trim()) {
-      const customPath = setting.value.trim();
-      // Ensure directory exists
-      try {
-        if (!fs.existsSync(customPath)) {
-          fs.mkdirSync(customPath, { recursive: true });
-        }
-        return customPath;
-      } catch (dirErr) {
-        console.error(`Failed to create custom backup directory: ${customPath}`, dirErr);
-        // Fall through to default directory
-      }
-    }
-  } catch (err) {
-    console.error('Error reading backup path setting:', err);
-  }
-  // Use default if no custom path is set or if custom path failed
-  try {
-    if (!fs.existsSync(defaultBackupsDir)) {
-      fs.mkdirSync(defaultBackupsDir, { recursive: true });
-    }
-  } catch (dirErr) {
-    console.error(`Failed to create default backup directory: ${defaultBackupsDir}`, dirErr);
-    throw new Error(`Cannot create backup directory: ${defaultBackupsDir}. Error: ${dirErr.message}`);
-  }
-  return defaultBackupsDir;
-};
+// Backup directory from settings, or the default one when none is set or it can't be used (one rule, shared with
+// the scheduler: see backupScheduler.resolveBackupDir)
+const resolveBackupDir = () => require('./backupScheduler').resolveBackupDir(defaultBackupsDir);
+const getBackupDir = () => resolveBackupDir().dir;
 
 // Ensure default directories exist on startup
 [uploadsDir, defaultBackupsDir].forEach((dir) => {
@@ -280,6 +253,24 @@ router.get('/backup/status', requirePermission('settings'), requireRole(['ADMIN'
       last_error: lastError ? lastError.value : null,
       backup_count: backupCount ? backupCount.count : 0,
     });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Where backups really go right now, and where the last one went. fallback = the folder set in Settings can't be
+// used (e.g. its drive is unplugged), so backups are going to the default folder instead.
+router.get('/backup/location', requirePermission('dashboard', 'settings'), requireRole(['ADMIN', 'MANAGER']), (req, res) => {
+  try {
+    const loc = resolveBackupDir();
+    let last = null;
+    try {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('backup.last_location');
+      last = row ? JSON.parse(row.value) : null;
+    } catch (_) {
+      // unreadable: just not shown
+    }
+    res.json({ configured: loc.configured, actual: loc.dir, fallback: loc.fallback, reason: loc.reason, default_dir: defaultBackupsDir, last });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -760,7 +751,8 @@ router.post('/backup', requirePermission('settings', 'dashboard'), requireRole([
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupFilename = `sop_backup_${timestamp}.db`;
-    const backupDir = getBackupDir();
+    const location = resolveBackupDir();
+    const backupDir = location.dir;
     const backupPath = path.join(backupDir, backupFilename);
 
     // Log the backup path being used
@@ -828,6 +820,7 @@ router.post('/backup', requirePermission('settings', 'dashboard'), requireRole([
     
     // Clear last error
     db.prepare('DELETE FROM settings WHERE key = ?').run('backup.last_error');
+    require('./backupScheduler').recordBackupLocation(location);
 
     // Run cleanup
     const { cleanupOldBackups } = require('./backupScheduler');

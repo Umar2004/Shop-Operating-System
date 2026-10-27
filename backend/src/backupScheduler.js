@@ -19,26 +19,47 @@ async function scheduledBackup(kind) {
 let weeklyJob = null;
 let monthlyJob = null;
 
-// Helper function to get backup directory from settings or use default
-const getBackupDir = () => {
+// Where backups go: the folder set in Settings, or the default folder when none is set or the set one can't be
+// created (e.g. the backup drive is unplugged). Returns { dir, configured, fallback, reason }, so the UI can show
+// where backups really go instead of falling back silently.
+const defaultBackupDir = () => path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'backups');
+const resolveBackupDir = (defaultDir = defaultBackupDir()) => {
+  let configured = null;
+  let reason = null;
   try {
     const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('backup.path');
     if (setting && setting.value && setting.value.trim()) {
-      const customPath = setting.value.trim();
-      if (!fs.existsSync(customPath)) {
-        fs.mkdirSync(customPath, { recursive: true });
+      configured = setting.value.trim();
+      try {
+        if (!fs.existsSync(configured)) {
+          fs.mkdirSync(configured, { recursive: true });
+        }
+        return { dir: configured, configured, fallback: false, reason: null };
+      } catch (dirErr) {
+        reason = dirErr.message;
+        console.error(`Backup folder ${configured} can't be used (${dirErr.message}); using ${defaultDir}`);
       }
-      return customPath;
     }
   } catch (err) {
     console.error('Error reading backup path setting:', err);
   }
-  const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-  const defaultBackupsDir = path.join(dataDir, 'backups');
-  if (!fs.existsSync(defaultBackupsDir)) {
-    fs.mkdirSync(defaultBackupsDir, { recursive: true });
+  try {
+    if (!fs.existsSync(defaultDir)) {
+      fs.mkdirSync(defaultDir, { recursive: true });
+    }
+  } catch (dirErr) {
+    throw new Error(`Cannot create backup directory: ${defaultDir}. Error: ${dirErr.message}`);
   }
-  return defaultBackupsDir;
+  return { dir: defaultDir, configured, fallback: !!configured, reason };
+};
+const getBackupDir = () => resolveBackupDir().dir;
+
+// Remembers where the last backup really went (shown in Settings and on the Dashboard)
+const recordBackupLocation = (location) => {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+    'backup.last_location',
+    JSON.stringify({ dir: location.dir, fallback_from: location.fallback ? location.configured : null, at: new Date().toISOString() })
+  );
 };
 
 // Back up the live database to `finalPath` atomically: SQLite backup API -> integrity check -> rename.
@@ -74,7 +95,8 @@ const createBackup = async ({ cloudKind = null } = {}) => {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupFilename = `sop_backup_${timestamp}.db`;
-    const backupDir = getBackupDir();
+    const location = resolveBackupDir();
+    const backupDir = location.dir;
     const backupPath = path.join(backupDir, backupFilename);
 
     // Log the backup path being used
@@ -134,6 +156,7 @@ const createBackup = async ({ cloudKind = null } = {}) => {
     
     // Clear last error
     db.prepare('DELETE FROM settings WHERE key = ?').run('backup.last_error');
+    recordBackupLocation(location);
 
     console.log(`✅ Backup created successfully: ${backupFilename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB) at ${backupPath}`);
     queueForCloud(backupPath);
@@ -141,7 +164,8 @@ const createBackup = async ({ cloudKind = null } = {}) => {
       filename: backupFilename, 
       size_bytes: sizeBytes,
       path: backupPath,
-      directory: backupDir
+      directory: backupDir,
+      fallback_from: location.fallback ? location.configured : null,
     };
   } catch (err) {
     console.error('❌ Automatic backup failed:', err);
@@ -283,6 +307,8 @@ module.exports = {
   createBackup,
   cleanupOldBackups,
   getBackupDir,
+  resolveBackupDir,
+  recordBackupLocation,
   writeVerifiedBackup,
 };
 

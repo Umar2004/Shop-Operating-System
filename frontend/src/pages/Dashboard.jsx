@@ -22,6 +22,7 @@ import { useAuthStore } from '../store/authStore';
 import BackupPromptDialog from '../components/settings/BackupPromptDialog';
 import { formatCurrency, formatNumber } from '../utils/numberFormat';
 import { describeCloud } from '../utils/cloudStatus';
+import BackupLocationWarning from '../components/BackupLocationWarning';
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -44,8 +45,12 @@ function Dashboard() {
   const canSeeCloud = user?.role === 'ADMIN' || user?.role === 'MANAGER';
 
   // Google Drive backup status (shown only once Drive is connected); never holds up the dashboard
+  // Where backups really go: warns when the backup folder (e.g. an external drive) can't be used
+  const [backupLocation, setBackupLocation] = useState(null);
   const loadCloud = () => {
-    if (canSeeCloud) api.getCloudStatus().then(setCloud).catch(() => setCloud(null));
+    if (!canSeeCloud) return;
+    api.getCloudStatus().then(setCloud).catch(() => setCloud(null));
+    api.getBackupLocation().then(setBackupLocation).catch(() => setBackupLocation(null));
   };
   useEffect(loadCloud, [canSeeCloud]);
 
@@ -134,7 +139,9 @@ function Dashboard() {
       setSession(null);
       setClosingCash('');
 
-      // The day-end copy for Google Drive uploads in the background: look again shortly
+      // The day-end backup may have gone elsewhere (backup drive unplugged), and its Google Drive copy uploads in
+      // the background: look now and again shortly
+      loadCloud();
       setTimeout(loadCloud, 5000);
 
       if (res.backup && res.backup.created) {
@@ -267,6 +274,8 @@ function Dashboard() {
           </>
         )}
       </Paper>
+
+      <BackupLocationWarning location={backupLocation} compact sx={{ mb: 3 }} />
 
       {/* Summary cards */}
       <Grid container spacing={2}>

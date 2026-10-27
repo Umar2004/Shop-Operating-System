@@ -152,6 +152,7 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
 
   // Check if daily backup should be created
   let backupResult = null;
+  let localBackupTried = false;
   if (!skipBackup) {
     try {
       const getSetting = (key, defaultValue) => {
@@ -162,6 +163,7 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
       const dailyEnabled = getSetting('backup.schedule.daily', 'disabled') === 'enabled';
       
       if (dailyEnabled) {
+        localBackupTried = true; // createBackup also queues the Google Drive copy
         const { createBackup } = require('./backupScheduler');
         try {
           backupResult = await createBackup({ cloudKind: 'day-end' });
@@ -192,6 +194,9 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   const updated = db.prepare('SELECT * FROM sessions WHERE id = ?').get(session.id);
   logActivity({ userId, action: 'DAY_CLOSED', entityType: 'SESSION', entityId: session.id,
     details: { business_date: updated.business_date, expected_cash: expectedCash, counted_cash: actualCash || 0, difference } });
+  // "Skip" (or daily backups off) skips only the LOCAL backup: Google Drive still gets a day-end copy, taken now so
+  // it includes the closed day. Not awaited; does nothing unless Drive is connected.
+  if (!localBackupTried) require('./cloud/uploader').enqueue('day-end', null);
   res.json({
     ...updated,
     backup: backupResult,

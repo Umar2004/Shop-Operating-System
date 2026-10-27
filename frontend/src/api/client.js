@@ -355,6 +355,7 @@ export const api = {
   createBackup: () => request('/settings/backup', { method: 'POST' }),
   listBackups: () => request('/settings/backups'),
   getBackupSchedule: () => request('/settings/backup/schedule'),
+  getBackupLocation: () => request('/settings/backup/location'),
   updateBackupSchedule: (schedule) => request('/settings/backup/schedule', {
     method: 'PUT',
     body: JSON.stringify(schedule),
