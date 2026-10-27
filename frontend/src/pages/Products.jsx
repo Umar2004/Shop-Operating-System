@@ -14,14 +14,8 @@ import {
   TableRow,
   TextField,
   Typography,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  Select,
   Chip,
   IconButton,
-  Autocomplete,
-  InputAdornment,
   Grid,
   Checkbox,
   Toolbar,
@@ -30,38 +24,23 @@ import {
   FormControlLabel,
   CircularProgress,
 } from '@mui/material';
-import { CalendarToday, Download } from '@mui/icons-material';
+import { Download } from '@mui/icons-material';
 import { MdEdit, MdInventory } from 'react-icons/md';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { getInputStep } from '../utils/numberFormat';
-import UnitSelect from '../components/UnitSelect';
-import { DEFAULT_UNIT } from '../config/units';
+import ProductFormDialog from '../components/products/ProductFormDialog';
 import { useConfirmDialog } from '../utils/confirmDialog';
 
 function Products() {
   const [products, setProducts] = useState([]);
   const [search, setSearch] = useState('');
-  const [openDialog, setOpenDialog] = useState(false);
-  const [editingProduct, setEditingProduct] = useState(null);
+  // Add/Edit dialog: which product (null = add) and a counter that gives each opening a fresh form
+  const [productDialog, setProductDialog] = useState({ open: false, product: null, seq: 0 });
   const [stockAdjustDialog, setStockAdjustDialog] = useState(false);
   const [stockAdjustProduct, setStockAdjustProduct] = useState(null);
   const [stockAdjustment, setStockAdjustment] = useState({ quantityChange: 0, reason: '', adjustmentType: 'add' }); // 'add' or 'reduce'
-  const [form, setForm] = useState({
-    name: '',
-    categoryName: '',
-    costPrice: 0,
-    sellingPrice: 0,
-    openingStock: 0,
-    minimumStock: 0,
-    unit: DEFAULT_UNIT,
-    mfd: '',
-    exp: '',
-    status: 'ACTIVE',
-  });
   const [categories, setCategories] = useState([]);
-  const mfdRef = useRef(null);
-  const expRef = useRef(null);
   const [alerts, setAlerts] = useState({
     lowStock: [],
     expired: [],
@@ -254,22 +233,7 @@ function Products() {
           <Button
             variant="contained"
             color="primary"
-            onClick={() => {
-              setEditingProduct(null);
-              setForm({
-                name: '',
-                categoryName: '',
-                costPrice: 0,
-                sellingPrice: 0,
-                openingStock: 0,
-                minimumStock: 0,
-                unit: DEFAULT_UNIT,
-                mfd: '',
-                exp: '',
-                status: 'ACTIVE',
-              });
-              setOpenDialog(true);
-            }}
+            onClick={() => setProductDialog((d) => ({ open: true, product: null, seq: d.seq + 1 }))}
           >
             Add Product
           </Button>
@@ -796,22 +760,7 @@ function Products() {
                       <IconButton
                         size="small"
                         color="primary"
-                        onClick={() => {
-                          setEditingProduct(p);
-                          setForm({
-                            name: p.name,
-                            categoryName: p.category_name || '',
-                            costPrice: p.cost_price,
-                            sellingPrice: p.selling_price,
-                            openingStock: p.opening_stock,
-                            minimumStock: p.minimum_stock,
-                            unit: p.unit || DEFAULT_UNIT,
-                            mfd: p.mfd || '',
-                            exp: p.exp || '',
-                            status: p.status || 'ACTIVE',
-                          });
-                          setOpenDialog(true);
-                        }}
+                        onClick={() => setProductDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }))}
                       >
                         <MdEdit size={18} />
                       </IconButton>
@@ -837,236 +786,20 @@ function Products() {
         </Table>
       </Paper>
 
-      <Dialog
-        open={openDialog}
-        onClose={() => {
-          setOpenDialog(false);
-          setEditingProduct(null);
+      <ProductFormDialog
+        key={productDialog.seq}
+        open={productDialog.open}
+        product={productDialog.product}
+        categories={categories}
+        onClose={() => setProductDialog((d) => ({ ...d, open: false }))}
+        onSaved={() => {
+          load();
+          api
+            .getProductAlerts()
+            .then((data) => setAlerts(data))
+            .catch(() => { });
         }}
-        fullWidth
-      >
-        <DialogTitle>{editingProduct ? 'Edit Product' : 'Add Product'}</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          <TextField
-            label="Name"
-            fullWidth
-            margin="normal"
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <Autocomplete
-            freeSolo
-            options={categories.map((c) => c.name)}
-            value={form.categoryName}
-            onChange={(_, newValue) =>
-              setForm({ ...form, categoryName: newValue || '' })
-            }
-            renderInput={(params) => (
-              <TextField
-                {...params}
-                label="Category"
-                fullWidth
-                margin="normal"
-              />
-            )}
-          />
-          <UnitSelect
-            fullWidth
-            margin="normal"
-            size="small"
-            value={form.unit}
-            onChange={(unit) => setForm({ ...form, unit })}
-          />
-          <TextField
-            label="Cost Price"
-            fullWidth
-            margin="normal"
-            type="number"
-            value={form.costPrice}
-            onChange={(e) =>
-              setForm({ ...form, costPrice: Number(e.target.value) || 0 })
-            }
-            inputProps={{ min: 0, step: getInputStep() }}
-          />
-          <TextField
-            label="Selling Price"
-            fullWidth
-            margin="normal"
-            type="number"
-            value={form.sellingPrice}
-            onChange={(e) =>
-              setForm({ ...form, sellingPrice: Number(e.target.value) || 0 })
-            }
-            // Warn early; saving at or below cost also asks for confirmation
-            error={Math.round(Number(form.sellingPrice) * 100) <= Math.round(Number(form.costPrice) * 100)}
-            helperText={
-              Math.round(Number(form.sellingPrice) * 100) <= Math.round(Number(form.costPrice) * 100)
-                ? 'Selling price is not greater than cost price'
-                : undefined
-            }
-            inputProps={{ min: 0, step: getInputStep() }}
-          />
-          <TextField
-            label="Opening Stock"
-            fullWidth
-            margin="normal"
-            type="number"
-            value={form.openingStock}
-            onChange={(e) =>
-              setForm({ ...form, openingStock: Number(e.target.value) || 0 })
-            }
-            inputProps={{ min: 0, step: getInputStep() }}
-            disabled={!!editingProduct}
-            helperText={editingProduct ? 'Opening stock cannot be changed after product creation' : ''}
-          />
-          <TextField
-            label="Minimum Stock Level"
-            fullWidth
-            margin="normal"
-            type="number"
-            value={form.minimumStock}
-            onChange={(e) =>
-              setForm({ ...form, minimumStock: Number(e.target.value) || 0 })
-            }
-            inputProps={{ min: 0, step: getInputStep() }}
-          />
-          <Box sx={{ display: 'flex', gap: 2 }}>
-            <TextField
-              label="MFD"
-              type="date"
-              margin="normal"
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      size="small"
-                      tabIndex={-1}
-                      onClick={() => {
-                        if (mfdRef.current) {
-                          if (typeof mfdRef.current.showPicker === 'function') {
-                            mfdRef.current.showPicker();
-                          } else {
-                            mfdRef.current.focus();
-                          }
-                        }
-                      }}
-                    >
-                      <CalendarToday fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-              inputRef={mfdRef}
-              value={form.mfd}
-              onChange={(e) => setForm({ ...form, mfd: e.target.value })}
-            />
-            <TextField
-              label="EXP"
-              type="date"
-              margin="normal"
-              fullWidth
-              InputLabelProps={{ shrink: true }}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      size="small"
-                      tabIndex={-1}
-                      onClick={() => {
-                        if (expRef.current) {
-                          if (typeof expRef.current.showPicker === 'function') {
-                            expRef.current.showPicker();
-                          } else {
-                            expRef.current.focus();
-                          }
-                        }
-                      }}
-                    >
-                      <CalendarToday fontSize="small" />
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-              inputRef={expRef}
-              value={form.exp}
-              onChange={(e) => setForm({ ...form, exp: e.target.value })}
-            />
-          </Box>
-          {editingProduct && (
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel>Status</InputLabel>
-              <Select
-                label="Status"
-                value={form.status}
-                onChange={(e) => setForm({ ...form, status: e.target.value })}
-              >
-                <MenuItem value="ACTIVE">ACTIVE</MenuItem>
-                <MenuItem value="INACTIVE">INACTIVE</MenuItem>
-              </Select>
-            </FormControl>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setOpenDialog(false);
-              setEditingProduct(null);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              // confirmLowMargin is sent only after the user confirms a price not above cost;
-              // the server enforces the same rule and answers 409 PRICE_NOT_ABOVE_COST otherwise
-              const saveProduct = async (confirmLowMargin) => {
-                try {
-                  if (editingProduct) {
-                    // Update existing product
-                    await api.updateProduct(editingProduct.id, {
-                      name: form.name,
-                      categoryName: form.categoryName,
-                      unit: form.unit,
-                      costPrice: form.costPrice,
-                      sellingPrice: form.sellingPrice,
-                      minimumStock: form.minimumStock,
-                      status: form.status,
-                      mfd: form.mfd || null,
-                      exp: form.exp || null,
-                      confirmLowMargin,
-                    });
-                    setOpenDialog(false);
-                    setEditingProduct(null);
-                    toast.success('Product updated');
-                  } else {
-                    // Create new product
-                    await api.createProduct({ ...form, confirmLowMargin });
-                    setOpenDialog(false);
-                    toast.success('Product created');
-                  }
-                  load();
-                  api
-                    .getProductAlerts()
-                    .then((data) => setAlerts(data))
-                    .catch(() => { });
-                } catch (err) {
-                  if (err.data?.code === 'PRICE_NOT_ABOVE_COST' && !confirmLowMargin) {
-                    confirm(`${err.message} Save anyway?`, () => saveProduct(true));
-                    return;
-                  }
-                  toast.error(err.message);
-                }
-              };
-              saveProduct(false);
-            }}
-          >
-            {editingProduct ? 'Update' : 'Save'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      />
 
       {/* Stock Adjustment Dialog */}
       <Dialog
