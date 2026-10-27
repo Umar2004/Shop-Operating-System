@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 
 const { initDb } = require('./initDb');
+const { PRODUCT_NAME } = require('./brand');
 const { authRouter, authMiddleware } = require('./auth');
 const { productsRouter } = require('./products');
 const { customersRouter } = require('./customers');
@@ -174,7 +175,7 @@ app.get('/api/settings/shop-info', (req, res) => {
     const logoSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('shop.logo_path');
     
     res.json({
-      name: nameSetting?.value || 'Shop Operating Platform',
+      name: nameSetting?.value || PRODUCT_NAME,
       logo_path: logoSetting?.value || null,
     });
   } catch (err) {

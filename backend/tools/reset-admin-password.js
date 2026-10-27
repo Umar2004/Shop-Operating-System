@@ -10,6 +10,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { PRODUCT_NAME } = require('../src/brand');
 const Database = require('better-sqlite3');
 const bcrypt = require('bcryptjs');
 
@@ -62,11 +63,13 @@ function oneTimePassword() {
   if (!fs.existsSync(dbPath)) fail('the shop database was not found there. Use --db <path to sop.db>.');
 
   // The app must be closed: it holds the database open
-  if (await appAnswers()) fail('the app is running. Close Shop Operating Platform and run this again.');
+  if (await appAnswers()) fail(`the app is running. Close ${PRODUCT_NAME} and run this again.`);
   if (process.platform === 'win32') {
     try {
-      if (/"Shop Operating Platform\.exe"/i.test(execSync('tasklist /FO CSV /NH', { encoding: 'utf8' }))) {
-        fail('"Shop Operating Platform.exe" is still running. Close it and run this again.');
+      // The exe is named after the build's productName: the current one, or the one before the Vexora rename
+      const running = execSync('tasklist /FO CSV /NH', { encoding: 'utf8' }).match(/"(Vexora Labs Shop Operating System|Shop Operating Platform)\.exe"/i);
+      if (running) {
+        fail(`"${running[1]}.exe" is still running. Close it and run this again.`);
       }
     } catch (_) {
       // tasklist not available: the port check above still applies

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const http = require('http');
 const { loadClient, endpoints, DRIVE_SCOPE } = require('./config');
 const store = require('./store');
+const { PRODUCT_NAME } = require('../brand');
 const { CloudError, request, json } = require('./http');
 
 // Google sign-in for a desktop app: PKCE + a one-time listener on 127.0.0.1 (Google's "loopback" redirect).
@@ -61,14 +62,14 @@ async function startConnect(onConnected) {
     }
     if (url.searchParams.get('error')) {
       Object.assign(current, { status: 'error', error: url.searchParams.get('error') === 'access_denied' ? 'Access was not allowed.' : `Google said: ${url.searchParams.get('error')}` });
-      finish('Not connected', 'Google Drive was not connected. You can close this tab and return to Shop Operating Platform.');
+      finish('Not connected', `Google Drive was not connected. You can close this tab and return to ${PRODUCT_NAME}.`);
       return;
     }
     try {
       const email = await exchangeCode(client, url.searchParams.get('code'), verifier, redirectUri);
       current.status = 'done';
       clearTimeout(current.timer);
-      finish('Google Drive connected', `Connected as ${email || 'your Google account'}. You can close this tab and return to Shop Operating Platform.`);
+      finish('Google Drive connected', `Connected as ${email || 'your Google account'}. You can close this tab and return to ${PRODUCT_NAME}.`);
       if (onConnected) onConnected(email);
     } catch (err) {
       Object.assign(current, { status: 'error', error: err.message });

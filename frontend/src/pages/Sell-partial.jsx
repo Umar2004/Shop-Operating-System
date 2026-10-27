@@ -36,6 +36,7 @@ import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { formatCurrency, formatNumber, getInputStep, getInputMin } from '../utils/numberFormat';
 import { generateInvoiceHTML } from '../utils/print';
+import { PRODUCT_NAME } from '../config/brand';
 
 function Sell() {
   const [session, setSession] = useState(null);
@@ -298,12 +299,12 @@ function Sell() {
             const fullInvoice = await api.getInvoice(res.invoice.id);
 
             // Get shop name and logo
-            let shopName = 'Shop Operating Platform';
+            let shopName = PRODUCT_NAME;
             let logoUrl = null;
             let receiptSettings = {};
             try {
               const shopSetting = await api.getSetting('shop.name');
-              shopName = shopSetting?.value || 'Shop Operating Platform';
+              shopName = shopSetting?.value || PRODUCT_NAME;
 
               // Get logo URL if printLogo is enabled
               if (printerSettings.printLogo) {

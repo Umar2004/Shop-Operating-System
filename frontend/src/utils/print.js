@@ -1,13 +1,14 @@
 /**
  * Print utility functions for generating HTML receipts and invoices
  */
+import { PRODUCT_NAME } from '../config/brand';
 
 /**
  * Generate HTML for test receipt
  */
 export function generateTestReceiptHTML(settings) {
   const { 
-    shopName = 'Shop Operating Platform', 
+    shopName = PRODUCT_NAME, 
     paperSize = '80',
     receiptSettings = {}
   } = settings;
@@ -113,7 +114,7 @@ export function generateTestReceiptHTML(settings) {
  */
 export function generateInvoiceHTML(invoiceData, settings) {
   const { 
-    shopName = 'Shop Operating Platform', 
+    shopName = PRODUCT_NAME, 
     paperSize = '80', 
     printLogo = false, 
     logoUrl = null,
@@ -348,7 +349,7 @@ export function generateInvoiceHTML(invoiceData, settings) {
  */
 export function generateReceiptHTML(receiptData, settings) {
   const { 
-    shopName = 'Shop Operating Platform', 
+    shopName = PRODUCT_NAME, 
     paperSize = '80', 
     printLogo = false, 
     logoUrl = null,

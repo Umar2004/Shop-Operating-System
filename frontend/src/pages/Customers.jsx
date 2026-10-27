@@ -37,6 +37,7 @@ import { getInputStep, getInputMin, formatNumber } from '../utils/numberFormat';
 import { generateReceiptHTML } from '../utils/print';
 import { saveInvoiceEdit } from '../utils/invoiceEdit';
 import { useAuthStore } from '../store/authStore';
+import { PRODUCT_NAME } from '../config/brand';
 
 const ADJUST_LABELS = {
   WRITE_OFF: {
@@ -988,7 +989,7 @@ function Customers() {
                   const printerSettings = await api.getPrinterSettings();
                   if (printerSettings.name) {
                     // Get shop name and logo
-                    let shopName = 'Shop Operating Platform';
+                    let shopName = PRODUCT_NAME;
                     let logoUrl = null;
                     let invoiceTotal = null;
                     let invoiceDiscount = null;
@@ -996,7 +997,7 @@ function Customers() {
 
                     try {
                       const shopSetting = await api.getSetting('shop.name');
-                      shopName = shopSetting?.value || 'Shop Operating Platform';
+                      shopName = shopSetting?.value || PRODUCT_NAME;
 
                       // Get logo URL if printLogo is enabled
                       if (printerSettings.printLogo) {

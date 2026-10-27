@@ -31,7 +31,8 @@ async function ensureFolder() {
       await json(res); // throws Google's error
     }
   }
-  const query = `mimeType = 'application/vnd.google-apps.folder' and name = '${q(FOLDER_NAME)}' and trashed = false and appProperties has { key='sop' and value='folder' }`;
+  // By the app tag, not the name: the folder keeps working if the product (or the owner) renames it
+  const query = "mimeType = 'application/vnd.google-apps.folder' and trashed = false and appProperties has { key='sop' and value='folder' }";
   const found = await json(await call(`${endpoints().api}/files?${new URLSearchParams({ q: query, fields: 'files(id)', spaces: 'drive' })}`));
   let id = found.files && found.files[0] && found.files[0].id;
   if (!id) {

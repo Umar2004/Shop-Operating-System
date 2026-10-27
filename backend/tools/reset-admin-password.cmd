@@ -5,8 +5,8 @@ setlocal
 set "NODE=node"
 where node >nul 2>nul || set "NODE=%ProgramFiles%\nodejs\node.exe"
 echo.
-echo Shop Operating Platform - reset the admin password
-echo ---------------------------------------------------
+echo Vexora Labs Shop Operating System - reset the admin password
+echo -------------------------------------------------------------
 echo Close the app before continuing.
 echo.
 pause

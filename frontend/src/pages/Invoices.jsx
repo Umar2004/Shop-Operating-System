@@ -46,6 +46,7 @@ import { formatCurrency, formatDate } from '../utils/numberFormat';
 import { useAuthStore } from '../store/authStore';
 import { generateInvoiceHTML } from '../utils/print';
 import { saveInvoiceEdit } from '../utils/invoiceEdit';
+import { PRODUCT_NAME } from '../config/brand';
 
 function Invoices() {
   const user = useAuthStore((s) => s.user);
@@ -187,12 +188,12 @@ function Invoices() {
       const fullInvoice = await api.getInvoice(invoice.id);
 
       // Get shop name and logo
-      let shopName = 'Shop Operating Platform';
+      let shopName = PRODUCT_NAME;
       let logoUrl = null;
       let receiptSettings = {};
       try {
         const shopSetting = await api.getSetting('shop.name');
-        shopName = shopSetting?.value || 'Shop Operating Platform';
+        shopName = shopSetting?.value || PRODUCT_NAME;
 
         // Get logo URL if printLogo is enabled
         if (printerSettings.printLogo) {

@@ -21,6 +21,7 @@ import {
 import { MdCloudUpload, MdCloudDone, MdCloudOff, MdRestore } from 'react-icons/md';
 import { api } from '../../api/client';
 import { describeCloud, formatCloudTime } from '../../utils/cloudStatus';
+import { PRODUCT_NAME } from '../../config/brand';
 
 const KIND_LABEL = { 'day-end': 'Day end', weekly: 'Weekly', monthly: 'Monthly' };
 
@@ -244,7 +245,7 @@ function CloudBackup({ onRestore }) {
             </Typography>
           )}
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-            Kept in the &quot;Shop Operating Platform Backups&quot; folder of your Drive: one copy for each of the last
+            Kept in the &quot;{PRODUCT_NAME} Backups&quot; folder of your Drive: one copy for each of the last
             14 days, 8 weeks and 12 months.
           </Typography>
         </>

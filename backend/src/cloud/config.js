@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('../db');
+const { PRODUCT_NAME } = require('../brand');
 
 // Google Drive backup: where its files live and which Google OAuth client it uses.
 // Everything sits next to the database (DATA_DIR), never inside it, so no backup ever carries it.
@@ -45,7 +46,9 @@ const endpoints = () => ({
 });
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const FOLDER_NAME = 'Shop Operating Platform Backups';
+// Only the name of a NEW folder: an existing one is found by its id or its app tag (drive.js), so renaming the
+// product doesn't lose the backups already in Drive
+const FOLDER_NAME = `${PRODUCT_NAME} Backups`;
 
 // Timing; the env overrides are for the tests (they run the same code with a shorter clock)
 const timing = () => ({

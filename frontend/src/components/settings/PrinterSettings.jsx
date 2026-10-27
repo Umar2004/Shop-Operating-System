@@ -23,6 +23,7 @@ import { toast } from 'react-toastify';
 import { api } from '../../api/client';
 import { generateTestReceiptHTML } from '../../utils/print';
 import UsbSetupGuide from './UsbSetupGuide';
+import { PRODUCT_NAME } from '../../config/brand';
 
 function PrinterSettings() {
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
@@ -143,11 +144,11 @@ function PrinterSettings() {
     setTesting(true);
     try {
       // Get shop name and receipt settings
-      let shopName = 'Shop Operating Platform';
+      let shopName = PRODUCT_NAME;
       let receiptSettings = {};
       try {
         const shopSettings = await api.getSetting('shop.name');
-        shopName = shopSettings?.value || 'Shop Operating Platform';
+        shopName = shopSettings?.value || PRODUCT_NAME;
         
         // Get receipt customization settings
         receiptSettings = await api.getReceiptSettings();

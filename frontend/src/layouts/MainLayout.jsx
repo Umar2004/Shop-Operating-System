@@ -20,6 +20,7 @@ import { MdDashboard, MdInventory, MdLogout, MdCategory, MdChevronLeft, MdChevro
 import { useAuthStore } from '../store/authStore';
 import ClockCalendar from '../components/ClockCalendar';
 import { api } from '../api/client';
+import { PRODUCT_NAME } from '../config/brand';
 
 const drawerWidth = 230;
 const drawerWidthCollapsed = 70;
@@ -61,7 +62,7 @@ function MainLayout({ window }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [logoUrl, setLogoUrl] = useState(null);
-  const [shopName, setShopName] = useState('Shop Operating Platform');
+  const [shopName, setShopName] = useState(PRODUCT_NAME);
   const [logoError, setLogoError] = useState(false);
   // Load colors from localStorage first to prevent flash
   const getInitialSidebarColors = () => {

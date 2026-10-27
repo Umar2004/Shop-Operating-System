@@ -21,13 +21,14 @@ import { Save, Refresh } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { api } from '../../api/client';
 import { generateInvoiceHTML } from '../../utils/print';
+import { PRODUCT_NAME } from '../../config/brand';
 
 function ReceiptCustomization() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewHtmls, setPreviewHtmls] = useState({ '58': '', '76': '', '80': '' });
   const [activePreview, setActivePreview] = useState('80');
-  const [shopName, setShopName] = useState('Shop Operating Platform');
+  const [shopName, setShopName] = useState(PRODUCT_NAME);
   const [settings, setSettings] = useState({
     headerAlign: 'center',
     itemAlign: 'left',
@@ -81,7 +82,7 @@ function ReceiptCustomization() {
   const loadShopName = async () => {
     try {
       const shopSetting = await api.getSetting('shop.name');
-      setShopName(shopSetting?.value || 'Shop Operating Platform');
+      setShopName(shopSetting?.value || PRODUCT_NAME);
     } catch (err) {
       // Use default
     }
