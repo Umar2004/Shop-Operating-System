@@ -1,6 +1,9 @@
 appId: com.shopoperatingplatform.sos
-productName: Shop Operating Platform
-copyright: Copyright © 2025
+# appId stays as it was: the installer finds (and upgrades) an existing install by it. A new appId would install
+# beside the old app instead of replacing it. productName only renames the exe, shortcuts and installer.
+# The data folder (%APPDATA%\sos) comes from package.json "name", not from productName.
+productName: Vexora Labs Shop Operating System
+copyright: Copyright © 2026 Vexora Labs
 
 directories:
   buildResources: build
@@ -53,6 +56,7 @@ win:
       arch:
         - x64
   requestedExecutionLevel: asInvoker
+  icon: build/vexora-icon.ico
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 nsis:

@@ -1,6 +1,14 @@
 import { StrictMode, useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+// Bundled fonts (the app runs offline): Inter for the UI, Cinzel for the Vexora Labs wordmark
+import '@fontsource/inter/400.css';
+import '@fontsource/inter/500.css';
+import '@fontsource/inter/600.css';
+import '@fontsource/inter/700.css';
+import '@fontsource/inter/800.css';
+import '@fontsource/cinzel/700.css';
+import '@fontsource/cinzel/800.css';
 import './index.css';
 import App from './App.jsx';
 import { api } from './api/client';
@@ -29,7 +37,7 @@ function AppWithTheme() {
   },
   typography: {
     fontFamily:
-      '"Roboto", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     // Base font size scales with viewport
     fontSize: 16,
     htmlFontSize: 16,
@@ -126,7 +134,7 @@ function AppWithTheme() {
             },
             typography: {
               fontFamily:
-                '"Roboto", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
               fontSize: 16,
               htmlFontSize: 16,
               h1: {
