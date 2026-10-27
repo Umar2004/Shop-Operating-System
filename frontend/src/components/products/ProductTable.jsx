@@ -1,6 +1,23 @@
-import { memo } from 'react';
-import { Box, Checkbox, IconButton, Paper, Table, TableBody, TableCell, TableHead, TableRow, Tooltip } from '@mui/material';
+import { memo, useMemo } from 'react';
+import {
+  Box,
+  Button,
+  Checkbox,
+  IconButton,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TablePagination,
+  TableRow,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import { MdEdit, MdInventory } from 'react-icons/md';
+
+// Rows per page; the list is fetched whole and paged here (no API change)
+export const PRODUCTS_PAGE_SIZE = 50;
 
 const productCode = (p) => p.product_code || `PORD-${String(p.id).padStart(5, '0')}`;
 
@@ -45,20 +62,51 @@ const ProductRow = memo(function ProductRow({ product: p, selected, onToggle, on
   );
 });
 
-// The product list. products: the rows to show; selected: a Set of selected ids.
-function ProductTable({ products, selected, onToggle, onToggleAll, onEdit, onAdjust }) {
-  const selectedHere = products.reduce((n, p) => n + (selected.has(p.id) ? 1 : 0), 0);
+// The product list, one page at a time. products: every product the current search returned; selected: a Set of
+// selected ids. The header checkbox selects this page only; "Select all N matching" (shown once the page is fully
+// selected) extends it to every product the search returned.
+function ProductTable({ products, selected, page, onPageChange, onToggle, onTogglePage, onSelectAll, onClearSelection, onEdit, onAdjust }) {
+  const pageCount = Math.max(1, Math.ceil(products.length / PRODUCTS_PAGE_SIZE));
+  const current = Math.min(page, pageCount - 1); // a reload with fewer products may leave the page past the end
+  const rows = useMemo(
+    () => products.slice(current * PRODUCTS_PAGE_SIZE, (current + 1) * PRODUCTS_PAGE_SIZE),
+    [products, current]
+  );
+  const selectedHere = rows.reduce((n, p) => n + (selected.has(p.id) ? 1 : 0), 0);
+  const pageSelected = rows.length > 0 && selectedHere === rows.length;
+  const allSelected = products.length > 0 && products.every((p) => selected.has(p.id));
+
   return (
     <Paper sx={{ p: 2 }}>
+      {pageSelected && products.length > rows.length && (
+        <Box
+          role="status"
+          sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, flexWrap: 'wrap', mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}
+        >
+          {allSelected ? (
+            <>
+              <Typography variant="body2">All {products.length} matching products are selected.</Typography>
+              <Button size="small" onClick={onClearSelection}>Clear selection</Button>
+            </>
+          ) : (
+            <>
+              <Typography variant="body2">All {rows.length} products on this page are selected.</Typography>
+              <Button size="small" onClick={() => onSelectAll(products.map((p) => p.id))}>
+                Select all {products.length} matching products
+              </Button>
+            </>
+          )}
+        </Box>
+      )}
       <Table size="small">
         <TableHead>
           <TableRow>
             <TableCell padding="checkbox">
               <Checkbox
-                checked={products.length > 0 && selectedHere === products.length}
-                indeterminate={selectedHere > 0 && selectedHere < products.length}
-                onChange={(e) => onToggleAll(e.target.checked)}
-                inputProps={{ 'aria-label': 'Select all products' }}
+                checked={pageSelected}
+                indeterminate={selectedHere > 0 && selectedHere < rows.length}
+                onChange={(e) => onTogglePage(rows.map((p) => p.id), e.target.checked)}
+                inputProps={{ 'aria-label': 'Select all products on this page' }}
               />
             </TableCell>
             <TableCell>Product ID</TableCell>
@@ -76,7 +124,7 @@ function ProductTable({ products, selected, onToggle, onToggleAll, onEdit, onAdj
           </TableRow>
         </TableHead>
         <TableBody>
-          {products.map((p) => (
+          {rows.map((p) => (
             <ProductRow
               key={p.id}
               product={p}
@@ -88,6 +136,16 @@ function ProductTable({ products, selected, onToggle, onToggleAll, onEdit, onAdj
           ))}
         </TableBody>
       </Table>
+      <TablePagination
+        component="div"
+        count={products.length}
+        page={current}
+        onPageChange={(_, next) => onPageChange(next)}
+        rowsPerPage={PRODUCTS_PAGE_SIZE}
+        rowsPerPageOptions={[]}
+        showFirstButton
+        showLastButton
+      />
     </Paper>
   );
 }

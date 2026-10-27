@@ -48,6 +48,7 @@ function Products() {
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [bulkPreview, setBulkPreview] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [page, setPage] = useState(0);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkJobId, setBulkJobId] = useState(null);
@@ -86,6 +87,7 @@ function Products() {
 
   // Real-time search with debouncing
   useEffect(() => {
+    setPage(0); // new search: back to the first page of results
     const timeoutId = setTimeout(() => {
       load(search);
     }, 300); // Wait 300ms after user stops typing
@@ -99,9 +101,16 @@ function Products() {
   const toggleOne = useCallback((id, checked) => {
     setSelectedIds((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)));
   }, []);
-  const toggleAll = useCallback((checked) => {
-    setSelectedIds(checked ? products.map((p) => p.id) : []);
-  }, [products]);
+  // Header checkbox: select or clear this page's products, keeping any selection elsewhere
+  const togglePage = useCallback((ids, checked) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => (checked ? next.add(id) : next.delete(id)));
+      return [...next];
+    });
+  }, []);
+  const selectAll = useCallback((ids) => setSelectedIds(ids), []);
+  const clearSelection = useCallback(() => setSelectedIds([]), []);
   const openEdit = useCallback((p) => {
     setProductDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }));
   }, []);
@@ -712,8 +721,12 @@ function Products() {
       <ProductTable
         products={products}
         selected={selected}
+        page={page}
+        onPageChange={setPage}
         onToggle={toggleOne}
-        onToggleAll={toggleAll}
+        onTogglePage={togglePage}
+        onSelectAll={selectAll}
+        onClearSelection={clearSelection}
         onEdit={openEdit}
         onAdjust={openAdjust}
       />
