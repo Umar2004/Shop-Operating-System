@@ -35,6 +35,8 @@ import { MdEdit, MdInventory } from 'react-icons/md';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { getInputStep } from '../utils/numberFormat';
+import UnitSelect from '../components/UnitSelect';
+import { DEFAULT_UNIT } from '../config/units';
 import { useConfirmDialog } from '../utils/confirmDialog';
 
 function Products() {
@@ -52,7 +54,7 @@ function Products() {
     sellingPrice: 0,
     openingStock: 0,
     minimumStock: 0,
-    unit: 'pcs',
+    unit: DEFAULT_UNIT,
     mfd: '',
     exp: '',
     status: 'ACTIVE',
@@ -261,7 +263,7 @@ function Products() {
                 sellingPrice: 0,
                 openingStock: 0,
                 minimumStock: 0,
-                unit: 'pcs',
+                unit: DEFAULT_UNIT,
                 mfd: '',
                 exp: '',
                 status: 'ACTIVE',
@@ -803,7 +805,7 @@ function Products() {
                             sellingPrice: p.selling_price,
                             openingStock: p.opening_stock,
                             minimumStock: p.minimum_stock,
-                            unit: p.unit || 'pcs',
+                            unit: p.unit || DEFAULT_UNIT,
                             mfd: p.mfd || '',
                             exp: p.exp || '',
                             status: p.status || 'ACTIVE',
@@ -868,20 +870,13 @@ function Products() {
               />
             )}
           />
-          <FormControl fullWidth margin="normal" size="small">
-            <InputLabel>Unit</InputLabel>
-            <Select
-              label="Unit"
-              value={form.unit}
-              onChange={(e) => setForm({ ...form, unit: e.target.value })}
-            >
-              <MenuItem value="Kg">Kg</MenuItem>
-              <MenuItem value="L">L</MenuItem>
-              <MenuItem value="pcs">pcs</MenuItem>
-              <MenuItem value="cm²">cm²</MenuItem>
-              <MenuItem value="inch">inch</MenuItem>
-            </Select>
-          </FormControl>
+          <UnitSelect
+            fullWidth
+            margin="normal"
+            size="small"
+            value={form.unit}
+            onChange={(unit) => setForm({ ...form, unit })}
+          />
           <TextField
             label="Cost Price"
             fullWidth
