@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, Typography } from '@mui/material';
+import { Alert, Box, Button } from '@mui/material';
+import { LockResetOutlined } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import PasswordField from '../components/PasswordField';
+import VexoraAuthLayout, { FieldLabel, VexoraCardHeader } from '../components/VexoraAuthLayout';
 
 // Change my password. Also the screen a user is held on when they must choose a new password
 // (factory password, or a temporary one set by the admin).
@@ -33,7 +35,8 @@ function ChangePassword() {
     try {
       const res = await api.changePassword(form.current, form.next);
       setAuth(res.token, res.user);
-      toast.success('Password changed');
+      // Dark when it shows over the (dark) recovery key screen, light over the main app
+      toast.success('Password changed', { theme: res.user.recoveryKeyMissing ? 'dark' : 'light' });
       navigate(res.user.recoveryKeyMissing ? '/recovery-key' : '/', { replace: true });
     } catch (err) {
       setError(err.message);
@@ -43,74 +46,80 @@ function ChangePassword() {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#f5f5f5', px: 2 }}>
-      <Card sx={{ width: '100%', maxWidth: 420 }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom>
-            {forced ? 'Choose a new password' : 'Change my password'}
-          </Typography>
-          {forced && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              {user?.username}, your current password is a temporary or factory password. Choose your own to continue.
-            </Alert>
+    <VexoraAuthLayout>
+      <VexoraCardHeader
+        icon={<LockResetOutlined />}
+        title={forced ? 'Choose a new password' : 'Change my password'}
+        subtitle={
+          forced
+            ? `${user?.username}, your current password is a temporary or factory password. Choose your own to continue.`
+            : `Signed in as ${user?.username}`
+        }
+      />
+      <Box component="form" onSubmit={submit}>
+        <FieldLabel htmlFor="cp-current">Current password</FieldLabel>
+        <PasswordField
+          id="cp-current"
+          fullWidth
+          autoFocus
+          autoComplete="current-password"
+          value={form.current}
+          onChange={(e) => setForm({ ...form, current: e.target.value })}
+          sx={{ mb: 1.75 }}
+        />
+        <FieldLabel htmlFor="cp-new">New password</FieldLabel>
+        <PasswordField
+          id="cp-new"
+          fullWidth
+          autoComplete="new-password"
+          helperText="At least 8 characters; not your username"
+          value={form.next}
+          onChange={(e) => setForm({ ...form, next: e.target.value })}
+          sx={{ mb: 1.75 }}
+        />
+        <FieldLabel htmlFor="cp-confirm">Confirm new password</FieldLabel>
+        <PasswordField
+          id="cp-confirm"
+          fullWidth
+          autoComplete="new-password"
+          value={form.confirm}
+          onChange={(e) => setForm({ ...form, confirm: e.target.value })}
+          confirms={form.next}
+        />
+        {error && (
+          <Alert severity="error" sx={{ mt: 2 }}>
+            {error}
+          </Alert>
+        )}
+        <Button
+          type="submit"
+          variant="contained"
+          fullWidth
+          disabled={saving || !form.current || !form.next || form.next !== form.confirm}
+          sx={{ mt: 2.5, height: 50, fontSize: 16, fontWeight: 700 }}
+        >
+          {saving ? 'Saving…' : 'Change password'}
+        </Button>
+        <Box sx={{ mt: 1, textAlign: 'center' }}>
+          {forced ? (
+            <Button
+              onClick={async () => {
+                try {
+                  await api.logout();
+                } catch {
+                  // already ended
+                }
+                logout();
+              }}
+            >
+              Log out
+            </Button>
+          ) : (
+            <Button onClick={() => navigate(-1)}>Cancel</Button>
           )}
-          <Box component="form" onSubmit={submit}>
-            <PasswordField
-              fullWidth
-              margin="normal"
-              label="Current password"
-              autoComplete="current-password"
-              value={form.current}
-              onChange={(e) => setForm({ ...form, current: e.target.value })}
-            />
-            <PasswordField
-              fullWidth
-              margin="normal"
-              label="New password"
-              autoComplete="new-password"
-              helperText="At least 8 characters; not your username"
-              value={form.next}
-              onChange={(e) => setForm({ ...form, next: e.target.value })}
-            />
-            <PasswordField
-              fullWidth
-              margin="normal"
-              label="Confirm new password"
-              autoComplete="new-password"
-              value={form.confirm}
-              onChange={(e) => setForm({ ...form, confirm: e.target.value })}
-              confirms={form.next}
-            />
-            {error && (
-              <Alert severity="error" sx={{ mt: 1 }}>
-                {error}
-              </Alert>
-            )}
-            <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-              {forced ? (
-                <Button
-                  onClick={async () => {
-                    try {
-                      await api.logout();
-                    } catch (_) {
-                      // already ended
-                    }
-                    logout();
-                  }}
-                >
-                  Log out
-                </Button>
-              ) : (
-                <Button onClick={() => navigate(-1)}>Cancel</Button>
-              )}
-              <Button type="submit" variant="contained" disabled={saving || !form.current || !form.next || form.next !== form.confirm}>
-                {saving ? 'Saving…' : 'Change password'}
-              </Button>
-            </Box>
-          </Box>
-        </CardContent>
-      </Card>
-    </Box>
+        </Box>
+      </Box>
+    </VexoraAuthLayout>
   );
 }
 

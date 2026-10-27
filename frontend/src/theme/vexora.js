@@ -57,6 +57,31 @@ export const vexoraTheme = createTheme({
         notchedOutline: { borderColor: VEXORA.borderStrong },
       },
     },
+    MuiButton: {
+      styleOverrides: {
+        // The red gradient primary button. #E5202B at the top (not the design's #F23541) keeps white text at 4.5:1.
+        containedPrimary: {
+          color: '#FFFFFF',
+          backgroundImage: `linear-gradient(180deg, ${VEXORA.red}, ${VEXORA.redDeep})`,
+          boxShadow: '0 10px 26px rgba(229,32,43,.30), inset 0 1px 0 rgba(255,255,255,.14)',
+          transition: 'box-shadow .15s ease, transform .08s ease',
+          '&:hover': {
+            backgroundColor: VEXORA.redDeep,
+            boxShadow: '0 14px 34px rgba(229,32,43,.42), inset 0 1px 0 rgba(255,255,255,.18)',
+          },
+          '&:active': { transform: 'translateY(1px)', boxShadow: '0 6px 16px rgba(229,32,43,.30)' },
+          '&.Mui-focusVisible': { boxShadow: '0 0 0 3px rgba(255,90,98,.45), 0 10px 26px rgba(229,32,43,.30)' },
+          '&.Mui-disabled': { backgroundImage: 'none', boxShadow: 'none' },
+        },
+        // Secondary actions (Cancel, Log out, Later): muted, not red
+        textPrimary: { color: VEXORA.muted, '&:hover': { color: VEXORA.text, backgroundColor: 'rgba(255,255,255,.05)' } },
+      },
+    },
+    MuiAlert: {
+      styleOverrides: {
+        standard: { borderRadius: 12, border: `1px solid ${VEXORA.border}` },
+      },
+    },
     MuiDialog: {
       styleOverrides: {
         paper: { backgroundImage: VEXORA.card, border: `1px solid ${VEXORA.border}`, borderRadius: 18 },
