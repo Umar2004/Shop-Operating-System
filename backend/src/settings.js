@@ -688,7 +688,7 @@ router.post('/backup/end-day', requireRole(['ADMIN', 'MANAGER']), async (req, re
     }
 
     const { createBackup } = require('./backupScheduler');
-    const result = await createBackup();
+    const result = await createBackup({ cloudKind: 'day-end' });
     
     res.json({
       created: true,
@@ -1289,4 +1289,5 @@ router.get('/logo', (req, res) => {
 
 module.exports = {
   settingsRouter: router,
+  assertUsableBackup,
 };

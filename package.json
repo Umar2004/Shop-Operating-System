@@ -1,6 +1,6 @@
 {
   "name": "sos",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Shop Operating Platform - POS and Shop Management System",
   "main": "electron/main.js",
   "scripts": {

@@ -164,7 +164,7 @@ router.post('/end', requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
       if (dailyEnabled) {
         const { createBackup } = require('./backupScheduler');
         try {
-          backupResult = await createBackup();
+          backupResult = await createBackup({ cloudKind: 'day-end' });
         } catch (backupErr) {
           console.error('Backup failed on day end:', backupErr);
           // Continue with day end even if backup fails

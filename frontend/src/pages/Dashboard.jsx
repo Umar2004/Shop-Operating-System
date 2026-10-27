@@ -21,6 +21,7 @@ import { api } from '../api/client';
 import { useAuthStore } from '../store/authStore';
 import BackupPromptDialog from '../components/settings/BackupPromptDialog';
 import { formatCurrency, formatNumber } from '../utils/numberFormat';
+import { describeCloud } from '../utils/cloudStatus';
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -39,6 +40,14 @@ function Dashboard() {
   const [error, setError] = useState('');
   const [showBackupDialog, setShowBackupDialog] = useState(false);
   const [pendingEndDay, setPendingEndDay] = useState(false);
+  const [cloud, setCloud] = useState(null);
+  const canSeeCloud = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+
+  // Google Drive backup status (shown only once Drive is connected); never holds up the dashboard
+  const loadCloud = () => {
+    if (canSeeCloud) api.getCloudStatus().then(setCloud).catch(() => setCloud(null));
+  };
+  useEffect(loadCloud, [canSeeCloud]);
 
   useEffect(() => {
     let isMounted = true;
@@ -124,6 +133,9 @@ function Dashboard() {
       const res = await api.endSession(Number(closingCash) || 0, skipBackup);
       setSession(null);
       setClosingCash('');
+
+      // The day-end copy for Google Drive uploads in the background: look again shortly
+      setTimeout(loadCloud, 5000);
 
       if (res.backup && res.backup.created) {
         // Backup was created successfully
@@ -450,6 +462,12 @@ function Dashboard() {
           <Typography variant="body2">
             ↩️ Cash refunds:{' '}
             <strong>{formatCurrency(summary.payments.cash_refunds)}</strong>
+          </Typography>
+        )}
+        {describeCloud(cloud) && (
+          <Typography variant="body2" color={describeCloud(cloud).ok === false ? 'error.main' : 'text.primary'}>
+            ☁️ Google Drive: <strong>{describeCloud(cloud).ok === true ? '✓' : describeCloud(cloud).ok === false ? '✗' : '…'}</strong>{' '}
+            {describeCloud(cloud).text}
           </Typography>
         )}
       </Paper>

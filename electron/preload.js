@@ -8,5 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listUsbPrinters:  () => ipcRenderer.invoke('printer:listUsbPrinters'),
   print:            (options) => ipcRenderer.invoke('printer:print', options),
   printDirect:      (options) => ipcRenderer.invoke('printer:printDirect', options),
+  // Google Drive backup: opens Google's sign-in page in the system browser
+  openGoogleSignIn: (url) => ipcRenderer.invoke('shell:openGoogleSignIn', url),
 });
 

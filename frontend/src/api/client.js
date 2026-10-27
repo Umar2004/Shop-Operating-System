@@ -391,6 +391,14 @@ export const api = {
     request(`/settings/backup/restore/${encodeURIComponent(filename)}`, {
       method: 'POST',
     }),
+  // Google Drive backup
+  getCloudStatus: () => request('/cloud/status'),
+  cloudConnect: () => request('/cloud/connect', { method: 'POST' }),
+  cloudCancelConnect: () => request('/cloud/connect/cancel', { method: 'POST' }),
+  cloudDisconnect: () => request('/cloud/disconnect', { method: 'POST' }),
+  cloudUploadNow: () => request('/cloud/upload-now', { method: 'POST' }),
+  listCloudBackups: () => request('/cloud/backups'),
+  prepareCloudRestore: (id) => request(`/cloud/backups/${encodeURIComponent(id)}/prepare-restore`, { method: 'POST' }),
   deleteBackup: (filename) =>
     request(`/settings/backup/${encodeURIComponent(filename)}`, {
       method: 'DELETE',

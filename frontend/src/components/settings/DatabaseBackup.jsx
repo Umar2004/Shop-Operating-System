@@ -39,6 +39,7 @@ import {
 import { api } from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
 import BackupList from './BackupList';
+import CloudBackup from './CloudBackup';
 import BackupUpload from './BackupUpload';
 import ResetSystemDialog from './ResetSystemDialog';
 
@@ -53,6 +54,7 @@ const DAYS_OF_WEEK = [
 ];
 
 function DatabaseBackup() {
+  const isAdmin = useAuthStore((s) => s.user?.role === 'ADMIN');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
@@ -582,6 +584,14 @@ function DatabaseBackup() {
           Create a backup of the current database immediately.
         </Typography>
       </Paper>
+
+      {/* Google Drive backup (admin) */}
+      {isAdmin && (
+        <CloudBackup onRestore={(filename) => {
+          setRestoreFilename(filename);
+          setRestoreDialogOpen(true);
+        }} />
+      )}
 
       {/* Upload Backup */}
       <BackupUpload onUploadSuccess={(result) => {

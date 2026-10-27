@@ -9,7 +9,7 @@ let dailyJob = null;
 async function scheduledBackup(kind) {
   const { logActivity } = require('./activityLog');
   try {
-    const result = await createBackup();
+    const result = await createBackup({ cloudKind: kind });
     logActivity({ action: 'BACKUP_CREATED', entityType: 'BACKUP', details: { file: result.filename, path: result.path, scheduled: kind } });
     cleanupOldBackups();
   } catch (err) {
@@ -65,8 +65,12 @@ const writeVerifiedBackup = async (finalPath) => {
   }
 };
 
-// Create a backup
-const createBackup = async () => {
+// Create a backup. cloudKind ('day-end' | 'weekly' | 'monthly'): also queue a copy for Google Drive when it is
+// connected. That is not awaited: the cloud never delays or fails a local backup.
+const createBackup = async ({ cloudKind = null } = {}) => {
+  const queueForCloud = (localPath) => {
+    if (cloudKind) require('./cloud/uploader').enqueue(cloudKind, localPath);
+  };
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupFilename = `sop_backup_${timestamp}.db`;
@@ -132,6 +136,7 @@ const createBackup = async () => {
     db.prepare('DELETE FROM settings WHERE key = ?').run('backup.last_error');
 
     console.log(`✅ Backup created successfully: ${backupFilename} (${(sizeBytes / 1024 / 1024).toFixed(2)} MB) at ${backupPath}`);
+    queueForCloud(backupPath);
     return { 
       filename: backupFilename, 
       size_bytes: sizeBytes,
@@ -146,7 +151,8 @@ const createBackup = async () => {
       'backup.last_error',
       err.message || 'Failed to create backup'
     );
-    
+    // e.g. the backup drive is unplugged: the cloud copy is then taken from a fresh snapshot
+    queueForCloud(null);
     throw err;
   }
 };
@@ -276,6 +282,7 @@ module.exports = {
   updateScheduler,
   createBackup,
   cleanupOldBackups,
+  getBackupDir,
   writeVerifiedBackup,
 };
 

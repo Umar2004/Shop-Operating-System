@@ -19,6 +19,8 @@ const { settingsRouter } = require('./settings');
 const { usersRouter } = require('./users');
 const { auditLogsRouter } = require('./auditLogs');
 const { startScheduler } = require('./backupScheduler');
+const { cloudRouter } = require('./cloud/routes');
+const cloudUploader = require('./cloud/uploader');
 
 // Initialize database and seed defaults
 initDb();
@@ -193,6 +195,7 @@ app.use('/api/categories', authMiddleware, categoriesRouter);
 app.use('/api/settings', authMiddleware, settingsRouter);
 app.use('/api/users', authMiddleware, usersRouter);
 app.use('/api/audit-logs', authMiddleware, auditLogsRouter);
+app.use('/api/cloud', authMiddleware, cloudRouter);
 
 // Global error handler (minimal)
 app.use((err, req, res, next) => {
@@ -283,6 +286,8 @@ if (process.env.SERVE_FRONTEND === 'true') {
 const server = app.listen(PORT, HOST, (err) => {
   if (err) return; // handled by the 'error' listener below
   console.log(`Backend API listening on http://${HOST}:${PORT}`);
+  // Google Drive backup: does nothing unless it is configured and connected
+  cloudUploader.start();
 });
 
 // Without this an occupied port leaves a process that logs "listening" but serves nothing

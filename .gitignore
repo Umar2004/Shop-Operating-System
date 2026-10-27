@@ -20,3 +20,9 @@ backend/uploads/
 # Logs and env
 *.log
 .env
+
+# Google Drive backup: OAuth client config and per-PC token/state/queue (never commit)
+google-oauth.json
+.gdrive-token
+cloud-state.json
+cloud-outbox/

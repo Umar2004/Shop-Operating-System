@@ -79,10 +79,16 @@ const ACTION_LABELS = {
   BACKUP_UPLOADED: 'Backup uploaded',
   BACKUP_RESTORED: 'Backup restored',
   BACKUP_DELETED: 'Backup deleted',
+  CLOUD_CONNECTED: 'Google Drive connected',
+  CLOUD_DISCONNECTED: 'Google Drive disconnected',
+  CLOUD_UPLOADED: 'Backup copied to Google Drive',
+  CLOUD_UPLOAD_FAILED: 'Google Drive upload failed',
+  CLOUD_ROTATED: 'Old Google Drive copies removed',
+  CLOUD_DOWNLOADED: 'Backup downloaded from Google Drive',
   SYSTEM_RESET: 'System reset',
   ACTIVITY_LOG_PRUNED: 'Old activity removed',
 };
-const WARN = new Set(['LOGIN_FAILED', 'RECOVERY_FAILED', 'PASSWORD_CHANGE_FAILED', 'INVOICE_DELETED', 'PAYMENT_DELETED', 'BACKUP_FAILED', 'BACKUP_RESTORED',
+const WARN = new Set(['LOGIN_FAILED', 'RECOVERY_FAILED', 'PASSWORD_CHANGE_FAILED', 'INVOICE_DELETED', 'PAYMENT_DELETED', 'BACKUP_FAILED', 'CLOUD_UPLOAD_FAILED', 'BACKUP_RESTORED',
   'SYSTEM_RESET', 'ADMIN_PASSWORD_RESET_OFFLINE', 'PRICE_OVERRIDE', 'LOW_MARGIN_CONFIRMED', 'USER_DELETED']);
 const label = (a) => ACTION_LABELS[a] || a;
 const when = (ts) => new Date(`${String(ts).replace(' ', 'T')}Z`).toLocaleString();

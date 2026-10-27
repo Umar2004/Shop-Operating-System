@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const http = require('http');
 
@@ -196,6 +196,20 @@ function sendRawToPrinter(usbDeviceId, dataBuffer) {
     });
   });
 }
+
+// Google sign-in for Drive backup must run in the system browser (Google refuses embedded windows).
+// Only Google's sign-in page may be opened this way.
+ipcMain.handle('shell:openGoogleSignIn', async (event, url) => {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'accounts.google.com') return false;
+  await shell.openExternal(parsed.toString());
+  return true;
+});
 
 // IPC Handlers for Printing
 ipcMain.handle('printer:getPrinters', async (event) => {

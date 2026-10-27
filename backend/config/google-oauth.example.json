@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to google-oauth.json (same folder) with the Desktop-app OAuth client from Google Cloud, or drop the JSON Google's console downloads here under that name. Never commit the real file.",
+  "client_id": "1234567890-xxxxxxxxxxxxxxxx.apps.googleusercontent.com",
+  "client_secret": "GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx"
+}
