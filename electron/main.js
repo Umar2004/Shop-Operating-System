@@ -360,8 +360,8 @@ function getAppPaths() {
     });
 
     // In production, backend is in resources or app root
-    // When installed: C:\Program Files\Shop Operating Platform\resources\app.asar.unpacked\backend\src\server.js
-    const appRoot = path.dirname(process.execPath); // C:\Program Files\Shop Operating Platform
+    // When installed: <install dir>\resources\app.asar.unpacked\backend\src\server.js
+    const appRoot = path.dirname(process.execPath); // <install dir>, e.g. ...\Programs\Vexora Labs Shop Operating System
     const resourcesPath = process.resourcesPath || path.join(appRoot, 'resources');
 
     log('APP', `App root (executable dir): ${appRoot}`);
@@ -1012,12 +1012,20 @@ function waitForServer(url, maxAttempts = 30, delay = 1000) {
   });
 }
 
-async function createWindow() {
-  log('APP', 'Creating application window...');
+const APP_TITLE = 'Vexora Labs — Shop Operating System';
+
+// The window opens straight away on the Vexora boot splash (electron/splash.html: local files only, so it needs
+// no backend and no network). createWindow() replaces it with the app once the backend passes its health check.
+async function showSplash() {
+  log('APP', 'Creating application window (boot splash)...');
+  const devIcon = path.join(__dirname, '..', 'build', 'vexora-icon.ico'); // a packaged exe carries the icon itself
 
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    title: APP_TITLE,
+    backgroundColor: '#050507', // the splash colour: no white flash before a page paints
+    icon: fs.existsSync(devIcon) ? devIcon : undefined,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -1038,7 +1046,7 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
-    log('FRONTEND', '✓ Frontend loaded successfully');
+    log('FRONTEND', `✓ Loaded ${mainWindow.webContents.getURL().startsWith('file:') ? 'boot splash' : 'frontend'}`);
   });
 
   // 'crashed' no longer exists in Electron 39; 'render-process-gone' is its replacement.
@@ -1049,6 +1057,31 @@ async function createWindow() {
       mainWindow.webContents.reload();
     }
   });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  try {
+    await mainWindow.loadFile(path.join(__dirname, 'splash.html'), { query: { v: app.getVersion() } });
+  } catch (error) {
+    log('APP', `Boot splash failed to load: ${error.message}`, true); // the dark window still shows
+  }
+  mainWindow.show();
+}
+
+// Update the splash's status line; failed stops its loading bar (an error dialog is about to open)
+function setSplashStatus(text, failed) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents
+    .executeJavaScript(`window.setSplashStatus && window.setSplashStatus(${JSON.stringify(text)}, ${!!failed})`)
+    .catch(() => {});
+}
+
+async function createWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    await showSplash();
+  }
 
   if (isDev) {
     try {
@@ -1084,13 +1117,6 @@ async function createWindow() {
     // PRODUCTION MODE
     log('APP', '=== PRODUCTION MODE - Starting Application ===');
 
-    // Show a window straight away so the cashier sees the app is starting, not nothing
-    const loadingHtml = '<!doctype html><meta charset="utf-8"><body style="margin:0;display:flex;align-items:center;' +
-      'justify-content:center;height:100vh;font-family:Segoe UI,Arial,sans-serif;background:#f5f7fa;color:#333">' +
-      '<div style="text-align:center"><h2 style="margin:0 0 8px">Shop Operating Platform</h2><p>Starting, please wait…</p></div>';
-    await mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(loadingHtml));
-    mainWindow.show();
-
     // Wait for the backend (up to 60 s: a cold start on a slow PC can take well over 10 s)
     log('BACKEND', 'Waiting for backend server to be ready (max 60 seconds)...');
     try {
@@ -1123,6 +1149,7 @@ async function createWindow() {
         `Log file location: ${logFilePath || 'Not initialized'}\n\n` +
         `Please check the log file for detailed error information.`;
 
+      setSplashStatus('Could not start the app', true);
       dialog.showErrorBox('Backend Server Not Available', errorMsg);
       return;
     }
@@ -1148,13 +1175,10 @@ async function createWindow() {
         (errorOutput ? `Backend Output:\n${errorOutput}\n\n` : '') +
         `Log file: ${logFilePath || 'Not initialized'}`;
 
+      setSplashStatus('Could not start the app', true);
       dialog.showErrorBox('Frontend Not Found', errorMsg);
     }
   }
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
 }
 
 app.whenReady().then(async () => {
@@ -1180,7 +1204,10 @@ app.whenReady().then(async () => {
   log('APP', `Executable path: ${process.execPath}`);
   log('APP', '========================================');
 
-  // Start backend FIRST (or use existing if in dev mode)
+  // The window and its boot splash first, so something shows while the backend starts
+  await showSplash();
+
+  // Start backend (or use existing if in dev mode)
   log('APP', '=== STARTING BACKEND SERVER ===');
   await startBackend();
 
@@ -1203,6 +1230,7 @@ app.whenReady().then(async () => {
           `Exit code: ${backendProcess.exitCode}\n\n` +
           (errorOutput ? `Backend Error Output:\n${errorOutput}\n\n` : '') +
           `Log file: ${logFilePath || 'Not initialized'}`;
+        setSplashStatus('Could not start the app', true);
         dialog.showErrorBox('Backend Startup Failed', errorMsg);
       }
       return;
@@ -1222,13 +1250,13 @@ app.whenReady().then(async () => {
         `• Backend directory was not found\n` +
         `• Backend dependencies are missing\n\n` +
         `Log file: ${logFilePath || 'Not initialized'}`;
+      setSplashStatus('Could not start the app', true);
       dialog.showErrorBox('Backend Not Started', errorMsg);
     }
     return;
   }
 
-  // Create window (will wait for backend health check in production mode)
-  log('APP', 'Creating application window...');
+  // Replace the splash with the app (in production once the backend passes its health check)
   createWindow();
 
   app.on('activate', () => {

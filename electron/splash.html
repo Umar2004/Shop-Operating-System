@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vexora Labs — Shop Operating System</title>
+<!-- Boot splash: Vexora (vendor) identity only, no shop logo, so it needs no backend and no network.
+     Shown by electron/main.js before the backend starts; replaced by the app once its health check passes. -->
+<style>
+  @font-face { font-family: 'Cinzel'; font-weight: 800; font-display: block; src: url('assets/fonts/cinzel-latin-800-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 400; font-display: block; src: url('assets/fonts/inter-latin-400-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 600; font-display: block; src: url('assets/fonts/inter-latin-600-normal.woff2') format('woff2'); }
+
+  :root {
+    --bg: #050507;
+    --red: #E5202B;
+    --red-bright: #F23541;
+    --red-deep: #C41019;
+    --text: #F6F6F7;
+    --muted: #9A9AA2;
+    --dim: #7A7A82; /* design's #5E5E66 / #45454c lifted to 4.5:1 on --bg */
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .glow {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(1100px 760px at 50% 40%, rgba(229, 32, 43, .18), transparent 70%);
+  }
+  main {
+    position: relative; height: 100%; padding: 24px 16px 64px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  }
+  .mark { animation: float 5s ease-in-out infinite; margin-bottom: clamp(18px, 4vh, 34px); }
+  .mark img {
+    display: block; width: clamp(110px, 22vmin, 180px); height: auto;
+    filter: drop-shadow(0 0 26px rgba(229, 32, 43, .55));
+    animation: spin 18s linear infinite;
+  }
+  h1 {
+    margin: 0; font-family: 'Cinzel', Georgia, serif; font-weight: 800;
+    font-size: clamp(32px, 7.4vw, 64px); letter-spacing: clamp(5px, 1.3vw, 11px);
+    line-height: 1.1; padding-left: clamp(5px, 1.3vw, 11px); /* balances the trailing letter-spacing */
+  }
+  h1 span { color: var(--red); }
+  .tagline {
+    margin: clamp(12px, 2.4vh, 20px) 0 0; display: flex; align-items: center; gap: 18px;
+    font-size: clamp(11px, 1.8vw, 15px); font-weight: 600; letter-spacing: clamp(4px, 1vw, 8px); color: var(--muted);
+  }
+  .tagline::before, .tagline::after {
+    content: ''; width: clamp(24px, 5vw, 56px); height: 1px;
+    background: linear-gradient(90deg, transparent, var(--red));
+  }
+  .tagline::after { background: linear-gradient(90deg, var(--red), transparent); }
+  .loader { margin-top: clamp(36px, 7vh, 64px); width: min(280px, 70vw); }
+  .track { position: relative; height: 3px; border-radius: 3px; background: #ffffff14; overflow: hidden; }
+  .bar {
+    position: absolute; top: 0; left: 0; height: 100%; width: 42%; border-radius: 3px;
+    background: linear-gradient(90deg, transparent, var(--red-bright) 40%, var(--red-deep));
+    box-shadow: 0 0 10px rgba(229, 32, 43, .6);
+    animation: sweep 1.6s cubic-bezier(.45, .05, .55, .95) infinite;
+  }
+  .status { margin: 14px 0 0; font-size: 12px; letter-spacing: 2px; color: var(--dim); min-height: 1.4em; }
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 20px; text-align: center;
+    font-size: 12px; letter-spacing: 1px; color: var(--dim); white-space: pre;
+  }
+
+  /* Startup failed: the error dialog is open; the bar stops and the line says so */
+  body.failed .bar { animation: none; width: 100%; background: var(--red-deep); box-shadow: none; }
+  body.failed .status { color: #FF5A62; }
+  body.failed .mark, body.failed .mark img { animation-play-state: paused; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+  @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(240%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .mark, .mark img { animation: none; }
+    .bar { animation-duration: 3s; }
+  }
+</style>
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+  <main>
+    <div class="mark"><img src="assets/vexora-swirl.png" alt=""></div>
+    <h1>VEXORA <span>LABS</span></h1>
+    <p class="tagline">SHOP OPERATING SYSTEM</p>
+    <div class="loader">
+      <div class="track" aria-hidden="true"><div class="bar"></div></div>
+      <p class="status" id="status" role="status" aria-live="polite">Initializing workspace…</p>
+    </div>
+  </main>
+  <footer id="footer">© 2026 Vexora Labs</footer>
+  <script>
+    // main.js passes the app version (?v=<version>) and calls setSplashStatus() while starting
+    const version = new URLSearchParams(location.search).get('v');
+    if (version) document.getElementById('footer').textContent = `v${version}  ·  © 2026 Vexora Labs`;
+    window.setSplashStatus = (text, failed) => {
+      document.getElementById('status').textContent = text;
+      document.body.classList.toggle('failed', !!failed);
+    };
+  </script>
+</body>
+</html>
