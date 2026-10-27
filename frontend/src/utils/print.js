@@ -18,6 +18,8 @@ export function generateTestReceiptHTML(settings) {
   const { 
     shopName = PRODUCT_NAME, 
     paperSize = '80',
+    printLogo = false,
+    logoUrl = null,
     receiptSettings = {}
   } = settings;
   
@@ -104,6 +106,7 @@ export function generateTestReceiptHTML(settings) {
   </style>
 </head>
 <body>
+  ${printLogo && logoUrl ? `<div style="margin-bottom: 5px; text-align: center;"><img src="${logoUrl}" alt="Logo" style="max-width: 150px; max-height: 60px; object-fit: contain;" /></div>` : ''}
   <div class="header">${shopName}</div>
   <div class="separator">--------------------</div>
   <div class="content">

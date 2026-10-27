@@ -157,9 +157,12 @@ function PrinterSettings() {
       }
 
       // Generate test receipt HTML
+      // The logo URL is replaced by the image itself when printing (electron/main.js), or dropped if none is set
       const html = generateTestReceiptHTML({
         shopName,
         paperSize: settings.paperSize,
+        printLogo: settings.printLogo || false,
+        logoUrl: settings.printLogo ? api.getLogoUrl() : null,
         receiptSettings,
       });
 

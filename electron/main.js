@@ -237,8 +237,12 @@ ipcMain.handle('printer:listUsbPrinters', async () => {
   }
 });
 
+// Shop logo for printing: fetched from the backend, inlined into receipt HTML, decoded when Jimp can't (shopLogo.js)
+const shopLogo = require('./shopLogo')({ BrowserWindow, log });
+
 ipcMain.handle('printer:print', async (event, options) => {
-  const { html, printerName, silent, paperSize } = options;
+  const { printerName, silent, paperSize } = options;
+  const html = await shopLogo.inlineShopLogo(options.html);
 
   log('PRINTER', `Print request — printer: ${printerName || 'Default'}, paper: ${paperSize || '80'}mm`);
 
@@ -260,6 +264,13 @@ ipcMain.handle('printer:print', async (event, options) => {
 
   try {
     await printWindow.loadFile(tempFile);
+    // Any image still loading (one not inlined above) gets up to 3 s to finish before the page is printed
+    await Promise.race([
+      printWindow.webContents.executeJavaScript(
+        'Promise.all([...document.images].map((img) => img.complete ? null : new Promise((done) => { img.onload = done; img.onerror = done; })))'
+      ),
+      new Promise((done) => setTimeout(done, 3000)),
+    ]).catch(() => {});
 
     const printOptions = {
       silent: silent !== false,
@@ -319,24 +330,27 @@ ipcMain.handle('printer:printDirect', async (event, options) => {
 
   const escpos = require('./escpos');
 
-  // Resolve logo as ESC/POS bitmap if requested
+  // The shop logo as an ESC/POS bitmap, if printing it is on. It comes from the backend (any extension, the
+  // right folder); anything Jimp can't read (WebP) is decoded to PNG first. A logo that can't be had or converted
+  // is logged and the receipt prints without it.
   let logoBuffer = null;
   if (printLogo) {
-    try {
-      // Logo path relative to backend directory
-      const uploadsDir = isDev
-        ? path.join(__dirname, '..', 'backend', 'uploads')
-        : path.join(app.getPath('userData'), 'uploads');
-      const logoPath = path.join(uploadsDir, 'logo', 'logo.png');
-      if (fs.existsSync(logoPath)) {
-        const imgData = fs.readFileSync(logoPath);
-        logoBuffer = await escpos.logoToEscpos(imgData, paperSize || '80');
-        log('PRINTER', `Logo converted: ${logoBuffer.length} bytes`);
-      } else {
-        log('PRINTER', `Logo file not found at ${logoPath}`, true);
+    const logo = await shopLogo.fetchShopLogo();
+    if (logo) {
+      try {
+        let image = logo.data;
+        try {
+          logoBuffer = await escpos.logoToEscpos(image, paperSize || '80', undefined, { dither: true });
+        } catch (e) {
+          log('PRINTER', `Logo (${logo.type}) needs decoding first: ${e.message}`);
+          image = await shopLogo.logoAsPng(logo);
+          logoBuffer = await escpos.logoToEscpos(image, paperSize || '80', undefined, { dither: true });
+        }
+        log('PRINTER', `Logo converted: ${logo.type}, ${logoBuffer.length} bytes`);
+      } catch (e) {
+        log('PRINTER', `Logo conversion failed, printing without it: ${e.message}`, true);
+        logoBuffer = null;
       }
-    } catch (e) {
-      log('PRINTER', `Logo conversion failed: ${e.message}`, true);
     }
   }
 

@@ -75,7 +75,11 @@ function parseSettings(s) {
 // ─── Logo → ESC/POS raster bitmap ────────────────────────────────────────────
 // Converts a PNG/JPG Buffer to GS v 0 ESC/POS bytes, centered on the paper.
 // Logo is scaled to ~50% of paper width, or to targetDots wide when given.
-async function logoToEscpos(imageBuffer, paperSize, targetDots) {
+// dither: shade with Floyd-Steinberg error diffusion instead of a hard 50% cut-off. Without it a light or
+// coloured logo (yellow, orange, light blue, grey) has no pixel darker than the cut-off and prints as blank paper;
+// dark colours still print solid and black-and-white art comes out the same.
+// The shop logo uses it; the small footer mark does not (its output is unchanged).
+async function logoToEscpos(imageBuffer, paperSize, targetDots, { dither = false } = {}) {
   const Jimp = require('jimp');
 
   const paperDots  = DOT_WIDTH[String(paperSize)] || 576;
@@ -103,10 +107,37 @@ async function logoToEscpos(imageBuffer, paperSize, targetDots) {
 
   const rowData = Buffer.alloc(totalBytesPerRow * h, 0x00);
 
+  // Grey level per dot (greyscale: r = g = b), with the dithering error spread to the neighbours
+  const grey = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) grey[y * w + x] = Jimp.intToRGBA(bg.getPixelColor(x, y)).r;
+  }
+  if (dither) {
+    // Levels first, so dark colours (navy, dark red) still print solid black and only mid-tones are shaded
+    const BLACK = 80;
+    const WHITE = 240;
+    for (let i = 0; i < grey.length; i++) {
+      grey[i] = Math.min(255, Math.max(0, ((grey[i] - BLACK) * 255) / (WHITE - BLACK)));
+    }
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const value = grey[i] < 128 ? 0 : 255;
+        const err = grey[i] - value;
+        grey[i] = value;
+        if (x + 1 < w) grey[i + 1] += (err * 7) / 16;
+        if (y + 1 < h) {
+          if (x > 0) grey[i + w - 1] += (err * 3) / 16;
+          grey[i + w] += (err * 5) / 16;
+          if (x + 1 < w) grey[i + w + 1] += err / 16;
+        }
+      }
+    }
+  }
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const { r } = Jimp.intToRGBA(bg.getPixelColor(x, y));
-      if (r < 128) {
+      if (grey[y * w + x] < 128) {
         const col = leftPadBytes * 8 + x;
         const byteIdx = y * totalBytesPerRow + Math.floor(col / 8);
         const bit = 7 - (col % 8);
