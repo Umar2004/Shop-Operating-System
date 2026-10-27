@@ -14,7 +14,6 @@ import {
   TableRow,
   TextField,
   Typography,
-  Chip,
   Grid,
   Checkbox,
   Toolbar,
@@ -29,6 +28,7 @@ import { api } from '../api/client';
 import { getInputStep } from '../utils/numberFormat';
 import ProductFormDialog from '../components/products/ProductFormDialog';
 import ProductTable from '../components/products/ProductTable';
+import CategoryFilter from '../components/products/CategoryFilter';
 import { useConfirmDialog } from '../utils/confirmDialog';
 
 function Products() {
@@ -54,7 +54,6 @@ function Products() {
   const [bulkJobId, setBulkJobId] = useState(null);
   const [bulkProgress, setBulkProgress] = useState(null);
   const [autoCreateCategories, setAutoCreateCategories] = useState(true);
-  const [showCategories, setShowCategories] = useState(true);
   const progressIntervalRef = useRef(null);
   const { confirm, ConfirmDialog } = useConfirmDialog();
 
@@ -140,38 +139,15 @@ function Products() {
       <Paper sx={{ p: 2, mb: 2 }}>
         <Toolbar sx={{ p: 0, mb: 1, gap: 2, flexWrap: 'wrap' }}>
           <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <TextField
                 label="Search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 size="small"
               />
-              <Button
-                size="small"
-                variant="text"
-                onClick={() => setShowCategories(!showCategories)}
-                sx={{ textTransform: 'none', fontSize: '0.75rem' }}
-              >
-                {showCategories ? 'Hide Categories' : 'Show Categories'}
-              </Button>
+              <CategoryFilter categories={categories} search={search} onSelect={setSearch} />
             </Box>
-            {showCategories && categories.length > 0 && (
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                <Typography variant="caption" sx={{ mr: 1 }}>
-                  Categories:
-                </Typography>
-                {categories.map((c) => (
-                  <Chip
-                    key={c.id}
-                    label={c.name}
-                    size="small"
-                    onClick={() => setSearch(c.name)}
-                    sx={{ cursor: 'pointer' }}
-                  />
-                ))}
-              </Box>
-            )}
           </Box>
           <Button variant="outlined" onClick={load}>
             Search
