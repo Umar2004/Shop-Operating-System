@@ -31,6 +31,16 @@ function getGreeting() {
   return 'Good Evening';
 }
 
+// Opening / closing cash can't be negative: no minus sign, plus sign or exponent (number fields accept all three),
+// pasted text keeps only digits and one decimal point, and the arrows stop at 0
+const cashFieldProps = {
+  onKeyDown: (e) => {
+    if (['-', '+', 'e', 'E'].includes(e.key)) e.preventDefault();
+  },
+  slotProps: { htmlInput: { min: 0, step: '0.01', inputMode: 'decimal' } },
+};
+const cleanCash = (value) => value.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1');
+
 function Dashboard() {
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
@@ -235,7 +245,8 @@ function Dashboard() {
                 type="number"
                 size="small"
                 value={closingCash}
-                onChange={(e) => setClosingCash(e.target.value)}
+                onChange={(e) => setClosingCash(cleanCash(e.target.value))}
+                {...cashFieldProps}
               />
               <Button
                 variant="outlined"
@@ -261,7 +272,8 @@ function Dashboard() {
                 type="number"
                 size="small"
                 value={openingCash}
-                onChange={(e) => setOpeningCash(e.target.value)}
+                onChange={(e) => setOpeningCash(cleanCash(e.target.value))}
+                {...cashFieldProps}
               />
               <Button
                 variant="contained"
