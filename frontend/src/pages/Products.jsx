@@ -2,10 +2,6 @@ import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
   Paper,
   Table,
   TableBody,
@@ -25,10 +21,10 @@ import {
 import { Download } from '@mui/icons-material';
 import { toast } from 'react-toastify';
 import { api } from '../api/client';
-import { getInputStep } from '../utils/numberFormat';
 import ProductFormDialog from '../components/products/ProductFormDialog';
 import ProductTable from '../components/products/ProductTable';
 import CategoryFilter from '../components/products/CategoryFilter';
+import StockAdjustDialog from '../components/products/StockAdjustDialog';
 import { useConfirmDialog } from '../utils/confirmDialog';
 
 function Products() {
@@ -36,9 +32,8 @@ function Products() {
   const [search, setSearch] = useState('');
   // Add/Edit dialog: which product (null = add) and a counter that gives each opening a fresh form
   const [productDialog, setProductDialog] = useState({ open: false, product: null, seq: 0 });
-  const [stockAdjustDialog, setStockAdjustDialog] = useState(false);
-  const [stockAdjustProduct, setStockAdjustProduct] = useState(null);
-  const [stockAdjustment, setStockAdjustment] = useState({ quantityChange: 0, reason: '', adjustmentType: 'add' }); // 'add' or 'reduce'
+  // Adjust Stock dialog: which product and a counter that gives each opening a fresh form
+  const [stockDialog, setStockDialog] = useState({ open: false, product: null, seq: 0 });
   const [categories, setCategories] = useState([]);
   const [alerts, setAlerts] = useState({
     lowStock: [],
@@ -114,10 +109,16 @@ function Products() {
     setProductDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }));
   }, []);
   const openAdjust = useCallback((p) => {
-    setStockAdjustProduct(p);
-    setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
-    setStockAdjustDialog(true);
+    setStockDialog((d) => ({ open: true, product: p, seq: d.seq + 1 }));
   }, []);
+  // After a save in either dialog: reload the list (same search) and the stock alerts
+  const reloadAfterChange = () => {
+    load();
+    api
+      .getProductAlerts()
+      .then((data) => setAlerts(data))
+      .catch(() => { });
+  };
 
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -149,7 +150,7 @@ function Products() {
               <CategoryFilter categories={categories} search={search} onSelect={setSearch} />
             </Box>
           </Box>
-          <Button variant="outlined" onClick={load}>
+          <Button variant="outlined" onClick={() => load()}>
             Search
           </Button>
           <Button
@@ -713,162 +714,16 @@ function Products() {
         product={productDialog.product}
         categories={categories}
         onClose={() => setProductDialog((d) => ({ ...d, open: false }))}
-        onSaved={() => {
-          load();
-          api
-            .getProductAlerts()
-            .then((data) => setAlerts(data))
-            .catch(() => { });
-        }}
+        onSaved={reloadAfterChange}
       />
 
-      {/* Stock Adjustment Dialog */}
-      <Dialog
-        open={stockAdjustDialog}
-        onClose={() => {
-          setStockAdjustDialog(false);
-          setStockAdjustProduct(null);
-          setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
-        }}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>
-          Adjust Stock - {stockAdjustProduct?.name}
-        </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          <Box sx={{ mb: 2, p: 2, bgcolor: '#f5f5f5', borderRadius: 1 }}>
-            <Typography variant="body2" color="text.secondary">
-              Current Stock: <strong>{stockAdjustProduct?.current_stock || 0}</strong>
-            </Typography>
-            {stockAdjustment.quantityChange > 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                {stockAdjustment.adjustmentType === 'add' ? (
-                  <>
-                    Adding: <strong style={{ color: '#2e7d32' }}>+{stockAdjustment.quantityChange}</strong>
-                    <br />
-                    New Stock: <strong style={{ color: '#2e7d32' }}>{stockAdjustProduct?.current_stock + stockAdjustment.quantityChange}</strong>
-                  </>
-                ) : (
-                  <>
-                    Reducing: <strong style={{ color: '#d32f2f' }}>-{stockAdjustment.quantityChange}</strong>
-                    <br />
-                    New Stock: <strong style={{ color: stockAdjustProduct?.current_stock - stockAdjustment.quantityChange >= 0 ? '#2e7d32' : '#d32f2f' }}>
-                      {stockAdjustProduct?.current_stock - stockAdjustment.quantityChange}
-                    </strong>
-                    {stockAdjustProduct?.current_stock - stockAdjustment.quantityChange < 0 && (
-                      <Typography variant="caption" color="error" display="block" sx={{ mt: 0.5 }}>
-                        Warning: Stock will go negative!
-                      </Typography>
-                    )}
-                  </>
-                )}
-              </Typography>
-            )}
-          </Box>
-
-          {/* Adjustment Type Selection */}
-          <Box sx={{ mb: 2, display: 'flex', gap: 1 }}>
-            <Button
-              variant={stockAdjustment.adjustmentType === 'add' ? 'contained' : 'outlined'}
-              color="success"
-              fullWidth
-              onClick={() => {
-                setStockAdjustment({ ...stockAdjustment, adjustmentType: 'add', quantityChange: 0 });
-              }}
-            >
-              Add Stock
-            </Button>
-            <Button
-              variant={stockAdjustment.adjustmentType === 'reduce' ? 'contained' : 'outlined'}
-              color="error"
-              fullWidth
-              onClick={() => {
-                setStockAdjustment({ ...stockAdjustment, adjustmentType: 'reduce', quantityChange: 0 });
-              }}
-            >
-              Reduce Stock
-            </Button>
-          </Box>
-
-          <TextField
-            label={stockAdjustment.adjustmentType === 'add' ? 'Quantity to Add' : 'Quantity to Reduce'}
-            fullWidth
-            margin="normal"
-            type="number"
-            value={stockAdjustment.quantityChange}
-            onChange={(e) => {
-              const value = Number(e.target.value) || 0;
-              setStockAdjustment({
-                ...stockAdjustment,
-                quantityChange: value >= 0 ? value : 0,
-              });
-            }}
-            helperText={stockAdjustment.adjustmentType === 'add'
-              ? 'Enter the quantity to add to current stock'
-              : 'Enter the quantity to reduce from current stock'}
-            inputProps={{ min: 0, step: getInputStep() }}
-          />
-          <TextField
-            label="Reason (Optional)"
-            fullWidth
-            margin="normal"
-            multiline
-            rows={3}
-            value={stockAdjustment.reason}
-            onChange={(e) =>
-              setStockAdjustment({ ...stockAdjustment, reason: e.target.value })
-            }
-            placeholder={
-              stockAdjustment.adjustmentType === 'add'
-                ? 'e.g., Stock received, New purchase, Stock correction...'
-                : 'e.g., Damaged items, Expired products, Stock correction, Theft...'
-            }
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setStockAdjustDialog(false);
-              setStockAdjustProduct(null);
-              setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            color={stockAdjustment.adjustmentType === 'add' ? 'success' : 'error'}
-            disabled={stockAdjustment.quantityChange === 0 || (stockAdjustment.adjustmentType === 'reduce' && stockAdjustment.quantityChange > (stockAdjustProduct?.current_stock || 0))}
-            onClick={async () => {
-              try {
-                const quantityChange = stockAdjustment.adjustmentType === 'add'
-                  ? stockAdjustment.quantityChange
-                  : -stockAdjustment.quantityChange;
-
-                await api.adjustProductStock(
-                  stockAdjustProduct.id,
-                  quantityChange,
-                  stockAdjustment.reason
-                );
-                setStockAdjustDialog(false);
-                setStockAdjustProduct(null);
-                setStockAdjustment({ quantityChange: 0, reason: '', adjustmentType: 'add' });
-                toast.success(`Stock ${stockAdjustment.adjustmentType === 'add' ? 'added' : 'reduced'} successfully`);
-                load();
-                api
-                  .getProductAlerts()
-                  .then((data) => setAlerts(data))
-                  .catch(() => { });
-              } catch (err) {
-                toast.error(err.message);
-              }
-            }}
-          >
-            {stockAdjustment.adjustmentType === 'add' ? 'Add Stock' : 'Reduce Stock'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <StockAdjustDialog
+        key={`stock-${stockDialog.seq}`}
+        open={stockDialog.open}
+        product={stockDialog.product}
+        onClose={() => setStockDialog((d) => ({ ...d, open: false }))}
+        onSaved={reloadAfterChange}
+      />
       <ConfirmDialog />
     </Box>
   );

@@ -11,7 +11,6 @@ import {
   TableHead,
   TablePagination,
   TableRow,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import { MdEdit, MdInventory } from 'react-icons/md';
@@ -46,16 +45,13 @@ const ProductRow = memo(function ProductRow({ product: p, selected, onToggle, on
       <TableCell>{p.status}</TableCell>
       <TableCell align="center">
         <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
-          <Tooltip title="Edit Product">
-            <IconButton size="small" color="primary" onClick={() => onEdit(p)}>
-              <MdEdit size={18} />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Adjust Stock">
-            <IconButton size="small" color="secondary" onClick={() => onAdjust(p)}>
-              <MdInventory size={18} />
-            </IconButton>
-          </Tooltip>
+          {/* A plain title, not a MUI Tooltip: two Tooltip instances per row were ~1,900 on the full list */}
+          <IconButton size="small" color="primary" title="Edit Product" aria-label={`Edit ${p.name}`} onClick={() => onEdit(p)}>
+            <MdEdit size={18} />
+          </IconButton>
+          <IconButton size="small" color="secondary" title="Adjust Stock" aria-label={`Adjust stock of ${p.name}`} onClick={() => onAdjust(p)}>
+            <MdInventory size={18} />
+          </IconButton>
         </Box>
       </TableCell>
     </TableRow>
